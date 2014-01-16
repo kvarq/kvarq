@@ -1,0 +1,15 @@
+# This file must be used with "source bin/activate" *from bash*
+# you cannot run it directly
+
+pushd `dirname $BASH_SOURCE` > /dev/null
+PYSEQDIR=`pwd`
+popd > /dev/null
+PATH=$PYSEQDIR/win32/pthread${PATH:+:}$PATH
+PYTHONPATH=$PYSEQDIR${PYTHONPATH:+:}$PYTHONPATH
+export PYTHONPATH
+
+alias kvarq=python\ -m\ kvarq.cli
+alias explorer=kvarq\ explorer
+alias table_scan=python\ $PYSEQDIR/scripts/table_scan.py
+alias table_combine=python\ $PYSEQDIR/scripts/table_combine.py
+

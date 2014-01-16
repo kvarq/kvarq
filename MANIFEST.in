@@ -1,0 +1,25 @@
+
+include activate
+
+recursive-include testsuites *.py
+recursive-include testsuites *.bases
+
+include tests/*.py
+include tests/test_engine.fastq
+include tests/test_analyser.fastq
+
+include scripts/*.py
+
+recursive-include res *
+
+include docs/*.rst
+include docs/Makefile
+include docs/make.bat
+recursive-include docs/_templates *
+recursive-include docs/_static *
+recursive-include docs/_build/html *
+
+recursive-include win32/pthread *
+
+global-exclude */.DS_Store
+

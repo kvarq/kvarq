@@ -1,0 +1,20 @@
+
+.figure {
+    border: thin dotted #0c3762;
+    width: 80%;
+    min-width: 450px;
+    max-width: 650px;
+    margin: 50px auto;
+    text-align: center;
+    padding:10px;
+}
+
+.figure .caption,
+.figure .legend {
+    text-align:justify;
+}
+
+.fig400px img {
+    width:400px;
+}
+

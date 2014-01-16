@@ -1,0 +1,23 @@
+
+# files we don't want in general
+.DS_Store
+*.pyc
+.*.sw*
+
+# explicitely local directories
+/data
+/tmp
+/local
+/env
+
+# generated files/directories
+tests/*_generated.fastq
+/MANIFEST
+/build
+/dist
+/kvarq.egg-info
+/kvarq/engine.so
+/kvarq/engine.pyd
+/docs/_api
+/docs/_build
+
