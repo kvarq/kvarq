@@ -99,13 +99,12 @@ newest_rst = sorted(
         key=os.path.getmtime)[-1]
 htmldir = os.path.join('docs', '_build', 'html')
 if os.path.isdir(htmldir):
-	newest_html = sorted(
-		[fname for fname in glob.glob(os.path.join(htmldir, '*.html'))
-			if os.path.isfile(fname)],
-		key=os.path.getmtime)[-1]
+	htmlmtimes = [os.path.getmtime(fname)
+            for fname in glob.glob(os.path.join(htmldir, '*.html'))
+			if os.path.isfile(fname)]
 
-if not os.path.isdir(htmldir) or \
-        os.path.getmtime(newest_rst) > os.path.getmtime(newest_html):
+if not os.path.isdir(htmldir) or not htmlmtimes or \
+        os.path.getmtime(newest_rst) > sorted(htmlmtimes)[-1]:
     shoutout('sphinx html documentation out of date!')
 
 # additional data files {{{1
