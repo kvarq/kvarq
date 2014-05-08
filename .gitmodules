@@ -1,0 +1,3 @@
+[submodule "testsuites/CanSNPer"]
+	path = testsuites/CanSNPer
+	url = git@github.com:kvarq/kvarq-CanSNPer.git
