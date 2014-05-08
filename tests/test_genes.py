@@ -4,7 +4,7 @@ from kvarq.genes import TemplateFromGenome, Gene, load_testsuite, Genome
 from kvarq import analyse
 
 import unittest
-import os.path
+import os.path, random
 
 MTBCpath = os.path.join(os.path.dirname(__file__), os.path.pardir, 'testsuites', 'MTBC')
 ancestor = Genome(os.path.join(MTBCpath, 'MTB_ancestor_reference.bases'), 'MTB ancestor')
@@ -103,6 +103,19 @@ class GenesTest(unittest.TestCase):
         aa_mutations = embB.aa_mutations(mutations)
         assert len(aa_mutations) == 1
         assert aa_mutations[0] == (2, 'T', 'R')
+
+    def test_genome(self):
+        g1 = Genome(os.path.join(os.path.dirname(__file__), 'test_genes.bases'))
+        g2 = Genome(os.path.join(os.path.dirname(__file__), 'test_genes.fa'))
+        n = 1000 # length of genome
+        m = (50, 100) # length range of sequence to compare
+        for i in range(10):
+            pos = random.randint(1, n-m[1])
+            length = random.randint(*m)
+            s1 = g1.read(pos, length)
+            s2 = g2.read(pos, length)
+            assert s1 == s2, 'Genome.read(%d, %d) did not yield same sequence!' % (
+                    pos, length)
 
 if __name__ == '__main__': unittest.main()
 

@@ -9,17 +9,25 @@ import time
 import shlex
 #import postmortem
 
+try:
+    from kvarq import cli
+except ImportError:
+    sys.stderr.write('could not find module kvarq -- make sure it is in the PYTHONPATH\n')
+    sys.exit(-1)
+
 from table_utils import csv_xls_wrapper
 
 parser = argparse.ArgumentParser(
-        description='runs "python kvarq/cli.py scan ..." over a list of .fastq '
+        description='runs kvarq CLI over a list of .fastq '
         'files specified in a .csv/.xls table and saves the resulting .json '
         'files as well as a kvarq.log file into an output directory and a '
-        'table_scan.log in the local directory')
+        'table_scan.log in the local directory -- by default, testsuites will '
+        'be taken from the directory "testsuites/" in the local directory (see '
+        '--flags argument below to change this default behavior)')
 
-defaultflags = '-l {logfn} scan -p'
+defaultflags = '-l kvarq.log -t testsuites/ scan -p'
 parser.add_argument('-f', '--flags', default=defaultflags,
-        help='flags to be passed on to kvarq/cli.py (default="%s -l") -- "{logfn}" will be replaced with "table_scan.log" in the destination directory'% defaultflags)
+        help='flags to be passed on to kvarq/cli.py (default="%s")'% defaultflags)
 
 parser.add_argument('-i', '--directory', default='.',
         help='where to look for .fastq files (defaults to ".")')
@@ -40,11 +48,12 @@ parser.add_argument('-c', '--column', type=int, default=0,
         help='specify column containing fastq name (defaults to 0=first column)')
 
 parser.add_argument('table',
-        help='.csv/.xls input file')
+        help='.csv/.xls input file containing list of .fastq files to scan')
 parser.add_argument('output_directory',
-        help='where to store .json/.txt files, "kvarq.log" and .csv file')
+        help='where to store .json files')
 
 args = parser.parse_args()
+kvarq_args = shlex.split(args.flags.format(logfn=logfn))
 
 
 # set up logging
@@ -69,23 +78,21 @@ lo.info('started : ' + str(sys.argv))
 if not os.path.isdir(args.output_directory):
     os.mkdir(args.output_directory)
 
+# src: http://stackoverflow.com/questions/6796492/python-temporarily-redirect-stdout-stderr
+class RedirectStdStreams(object):
+    def __init__(self, stdout=None, stderr=None):
+        self._stdout = stdout or sys.stdout
+        self._stderr = stderr or sys.stderr
 
-# find kvarq/cli.py and add kvarq/ to PYTHONPATH
-kvarq = None
-for path in sys.path + ['.', '..']:
-    candidate = os.path.join(path, 'kvarq', 'cli.py')
-    if os.path.exists(candidate):
-        if not path in os.environ['PYTHONPATH'].split(':'):
-            os.environ['PYTHONPATH'] = ':'.join(
-                    os.environ['PYTHONPATH'].split(':') +
-                    [path]
-                )
-        kvarq = candidate
-        break
-if not kvarq:
-    lo.error('could not locate kvarq/cli.py')
-    sys.exit(-1)
+    def __enter__(self):
+        self.old_stdout, self.old_stderr = sys.stdout, sys.stderr
+        self.old_stdout.flush(); self.old_stderr.flush()
+        sys.stdout, sys.stderr = self._stdout, self._stderr
 
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._stdout.flush(); self._stderr.flush()
+        sys.stdout = self.old_stdout
+        sys.stderr = self.old_stderr
 
 header = None
 table = csv_xls_wrapper(args.table)
@@ -127,17 +134,15 @@ for row in table:
         continue
 
     # run kvarq.cli
-    pyseq_args = ['python', kvarq] + \
-            shlex.split(args.flags.format(logfn=logfn)) + \
-            [fastq, jsonfn]
-    lo.info('scanning %s : %s'%(fastq, pyseq_args))
+    lo.info('scanning %s : kvarq.cli(%s)'%(fastq, kvarq_args + [fastq, jsonfn]))
+
+    fstdout = None
+    if args.save_output:
+        fstdout = file(txt, 'w')
 
     try:
-        output = subprocess.check_output(pyseq_args)
-
-        if args.save_output:
-            file(txt, 'w').write(output)
-
-    except subprocess.CalledProcessError, e:
+        with RedirectStdStreams(fstdout):
+            cli.main(kvarq_args + [fastq, jsonfn])
+    except Exception, e:
         lo.error('error while scanning %s : %s'%(jsonfn, str(e)))
 

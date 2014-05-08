@@ -5,17 +5,19 @@ KvarQ testsuites
 ================
 
 Testsuites define positions to scan for as well as how to interpret mutations.
-They have to be loaded (via the ``-t`` :ref:`command line switch
-<cli-scansingle-file>` or via the :ref:`GUI settings dialog <settings>`) prior
-to scanning but also to analyze ``.json`` data using the :ref:`explorer
-<explorer>`.  A ``.json`` file generated with a certain combination of
-testsuites can only be analyzed using the explorer if testsuites with the same
-version are used (this is because ``.json`` files only contain the names of the
-SNPs but the location within genes is saved in the testsuites).
+They have to be loaded (see :ref:`Loading Testsuites <loading-testsuites>` and
+the :ref:`GUI settings dialog <settings>`) prior to scanning but also to
+analyze ``.json`` data using the :ref:`explorer <explorer>`.  A ``.json`` file
+generated with a certain combination of testsuites can only be analyzed using
+the explorer if testsuites with the same version are used (this is because
+``.json`` files only contain the names of the SNPs but the location within
+genes is saved in the testsuites).
 
-
-KvarQ testsuites can be grouped together in a directory.  See for example the
-``testsuites/MTBC`` testsuites that are shipped with this version:
+KvarQ testsuites can be grouped together in a directory.  These directories can
+again be grouped together.  See **for example** the ``testsuites/MTBC``
+testsuites that are included in the KvarQ source code (additional testsuites
+are linked in as submodules in the ``testsuites/`` directory in the source
+distribution or can be `downloaded from github <http://github.com/kvarq>`_):
 
   - ``testsuites/MTBC/_util.py`` : every file that starts with an underscore
     will **not** be loaded from KvarQ when loading testsuites from a directory,
@@ -38,7 +40,10 @@ Rolling your own testsuite
 
 KvarQ makes it very simple to write new testsuites.  Take as an example the
 file included below (can be found in the ``testsuites/`` directory of the
-:ref:`source distribution <install-from-source>`).
+:ref:`source distribution <install-from-source>`).  After having developed
+a testsuite and tested it on your data, please `send me a note
+<mailto:andreas.steiner@unibas.ch>`_ and I will include a link in the KvarQ
+distribution.
 
 .. literalinclude:: ../testsuites/MTBC/example.py
   :language: python

@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import json
-import os.path
+import os, os.path
 import codecs
 from pprint import pprint
 import glob
@@ -50,11 +50,6 @@ def heardEnter():
         # e.g. windows fails
         return False
 
-def invalid_args(msg):
-    print '\n*** {}\n\n'.format(msg)
-    parser.print_help()
-    sys.exit(ERROR_COMMAND_LINE_SWITCH)
-
 
 # scan {{{1
 
@@ -63,7 +58,7 @@ def scan(args, testsuites):
     # prepare scanning {{{2
 
     try:
-        fastq = Fastq(args.fastq)
+        fastq = Fastq(args.fastq, paired=not args.no_paired)
     except FastqFileFormatException, e:
         lo.error('cannot open file %s : %s'%(args.fastq, str(e)))
         sys.exit(ERROR_FASTQ_FORMAT_ERROR)
@@ -86,7 +81,10 @@ def scan(args, testsuites):
     # do scanning {{{2
 
     mb = os.path.getsize(args.fastq) / 1024 / 1024
-    lo.info('scanning {} ({} MB)...'.format(args.fastq, mb))
+    lo.info('scanning {} ({})...'.format(
+            ', '.join(fastq.filenames()),
+            ', '.join(['%.2f MB' % (filesize/1024.**2) for filesize in fastq.filesizes()])
+        ))
     t0 = time.time()
 
     class AnalyseThread(threading.Thread):
@@ -126,16 +124,16 @@ def scan(args, testsuites):
             pb.update(stats['progress'])
             print >> sys.stderr, str(pb),
 
-        if args.coverage:
-            means = sorted([n/len(analyser[i])
-                    for i, n in enumerate(stats['nseqbasehits'])])
-
-            if means and means[len(means)/2] > args.coverage:
-                print >> sys.stderr
-                lo.info('aborting scanning: median of coverage %d > %d'%(
-                        means[len(means)/2], args.coverage))
-                engine.stop()
-                break
+#        if args.coverage:
+#            means = sorted([n/len(analyser[i])
+#                    for i, n in enumerate(stats['nseqbasehits'])])
+#
+#            if means and means[len(means)/2] > args.coverage:
+#                print >> sys.stderr
+#                lo.info('aborting scanning: median of coverage %d > %d'%(
+#                        means[len(means)/2], args.coverage))
+#                engine.stop()
+#                break
 
         # <CTRL-C> : output additional information
         if stats['sigints'] > sigints:
@@ -143,7 +141,7 @@ def scan(args, testsuites):
             # 2nd time : cancel scanning
             if time.time() - sigintt < 2.:
                 print >> sys.stderr, '\n\n*** caught multiple <CTRL-C> within 2s : abort scanning ***'
-                engine.abort()
+                engine.stop()
                 at.join()
                 break
 
@@ -200,7 +198,7 @@ def show(args):
         print 'dQ=' + str(fastq.dQ)
         print 'variants=' + str(fastq.variants)
         print 'readlength=' + str(fastq.readlength)
-        print 'records_approx=' + str(fastq.records_approx)
+        print 'records_approx=' + str(fastq.records_approx or '?')
 
 
 # update {{{1
@@ -313,7 +311,7 @@ parser.add_argument('-x', '--excepthook', action='store_true',
 parser.add_argument('-l', '--log',
         help='append log to specified file (similar to redirecting stderr, but without progress bar)')
 parser.add_argument('-t', '--testsuites', action='append',
-        help='load additional testsuites from specified files/directory (can be specified several times). all python files in specified directory not beginning with `_\' are loaded. filenames can contain version information after a `-\'. testsuites replace testsuites with same name specified in preceeding command line arguments. COMPULSORY switch for some commands (scan, update, illustrate, explorer)')
+        help='load additional testsuites from specified files/directory (can be specified several times). all python files in specified directory not beginning with `_\' are loaded. filenames can contain version information after a `-\'. testsuites replace testsuites with same name specified in preceeding command line arguments. COMPULSORY switch for some commands (scan, update, illustrate, explorer). default is read from colon separated environment variable KVARQ_TESTSUITES')
 
 # version {{{2
 parser_version = subparsers.add_parser('version',
@@ -348,11 +346,13 @@ parser_scan.add_argument('-r', '--readlength', action='store', type=int,
 parser_scan.add_argument('-o', '--overlap', action='store', type=int,
         default=default_config['minimum overlap'],
         help='minimum read overlap (default=%d)' % default_config['minimum overlap'])
-parser_scan.add_argument('-c', '--coverage', type=int,
-        default=default_config['stop median coverage'],
-        help='stop scanning when median coverage (including margins) is above specified value (default=%d) -- specify 0 to force scanning of entire file' % default_config['stop median coverage'])
+#parser_scan.add_argument('-c', '--coverage', type=int,
+#        default=default_config['stop median coverage'],
+#        help='stop scanning when median coverage (including margins) is above specified value (default=%d) -- specify 0 to force scanning of entire file' % default_config['stop median coverage'])
 parser_scan.add_argument('-1', '--no-reverse', action='store_true',
         help='do not scan for hits in reverse strand')
+parser_scan.add_argument('-P', '--no-paired', action='store_true',
+        help='ignore paired file -- by default, the file "strain_2.fastq[.gz]" is also read if "strain_1.fastq[.gz]" is specified on the command line')
 
 # output .json
 parser_scan.add_argument('-f', '--force', action='store_true',
@@ -432,8 +432,8 @@ parser_explorer.set_defaults(func=explorer)
 
 # __main__ {{{1
 
-def main():
-    args = parser.parse_args(sys.argv[1:])
+def main(argv):
+    args = parser.parse_args(argv)
 
     assert not (args.debug and args.quiet), \
             'make up your mind: debug OR normal OR quiet'
@@ -448,9 +448,20 @@ def main():
         sys.excepthook = traceit
 
     testsuites = dict()
+    testsuites_paths = list()
 
+    if 'KVARQ_TESTSUITES' in os.environ:
+        testsuites_paths += os.environ['KVARQ_TESTSUITES'].split(':')
+    if os.path.isdir('testsuites'):
+        testsuites_paths += [path for path in [os.path.join('testsuites', fname)
+                        for fname in os.listdir('testsuites')
+                        if fname[0] != '_']
+                if os.path.isdir(path) or path[-3:] == '.py']
     if args.testsuites:
-        for path in args.testsuites:
+        testsuites_paths += args.testsuites
+
+    if testsuites_paths:
+        for path in testsuites_paths:
             if os.path.isdir(path):
                 fnames = [fname for fname in glob.glob(os.path.join(path, '*.py'))
                         if not os.path.basename(fname)[0] == '_']
@@ -472,14 +483,22 @@ def main():
                     lo.error('could not load testsuite from "%s" : %s' % (fname, e))
 
     if args.func in [scan, update, illustrate, explorer]:
+        # MUST have testsuite
         if not testsuites:
-            invalid_args('must specify at least one testsuite')
+            sys.stderr.write('\n*** you must specify at least one testsuite! ***\n\n')
+            sys.stderr.write('(use the -t command line switch)\n\n')
+            sys.exit(ERROR_COMMAND_LINE_SWITCH)
         args.func(args, testsuites=testsuites)
+
     elif args.func in [info, gui]:
+        # CAN have testsuite
         args.func(args, testsuites=testsuites)
+
     else:
+        # NEVER has testsuite
         args.func(args)
 
+
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
 

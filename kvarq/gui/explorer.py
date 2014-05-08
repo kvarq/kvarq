@@ -342,10 +342,11 @@ class JsonExplorer:
         # special info 'analysis'
         if self.aname == 'info':
             self.infos = [
-                    'fastq : ' + self.analyser.fastq_fname,
-                    'size : %.2f MB'%(self.analyser.fastq_size/1024.**2),
+                    'fastq : ' + ', '.join(self.analyser.fastq_filenames),
+                    'size : ' + ', '.join(['%.2f MB'%(fastq_size/1024.**2)
+                            for fastq_size in self.analyser.fastq_sizes]),
                     'readlength : %d'%self.analyser.fastq_readlength,
-                    'records_approx : %d'%self.analyser.fastq_records_approx,
+                    'records_approx : %s'%str(self.analyser.fastq_records_approx or '?'),
                     'scantime : %d s'%int(self.analyser.scantime),
                     'config : ' + ' '.join([str(k)+'='+str(v)
                             for k, v in self.analyser.config.items()]),

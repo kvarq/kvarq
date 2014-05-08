@@ -189,7 +189,7 @@ class TextHist:
             xs.append(x)
 
         fmt = '[%%%dd-%%%dd] %%%dd (%%2d%%%%)'%(
-                max(N,4), max(N,4), int(log(mx)/log(10)) +1)
+                max(N,4), max(N,4), int(log(max(1, mx))/log(10)) +1)
         ret = ''
         if self.title:
             ret += self.title + '\n' + '-'*(len(self.title)) + '\n'

@@ -199,8 +199,8 @@ class Analyser:
         self.config = None
 
         # other information
-        self.fastq_fname = None
-        self.fastq_size = None
+        self.fastq_filenames = None
+        self.fastq_sizes = None
         self.fastq_readlength = None
         self.fastq_records_approx = None
         self.spacing = None
@@ -303,8 +303,8 @@ class Analyser:
         '''
 
         self.fastq = fastq
-        self.fastq_fname = fastq.fname
-        self.fastq_size = fastq.size
+        self.fastq_filenames = fastq.filenames()
+        self.fastq_sizes = fastq.filesizes()
         self.fastq_readlength = fastq.readlength
         self.fastq_records_approx = fastq.records_approx
 
@@ -319,10 +319,11 @@ class Analyser:
 
         # do the scanning
         t0 = time.time()
-        ret = engine.findseqs(self.fastq.fname, seqs)
+        ret = engine.findseqs(self.fastq.filenames(), seqs)
         lo.debug('found %d hits' % len(ret['hits']))
         self.stats = ret['stats']
         self.hits = ret['hits']
+        self.hitseqs = ret['hitseqs']
         self.scantime = time.time() - t0
 
         self.update_coverages()
@@ -336,12 +337,11 @@ class Analyser:
             be regenerated '''
 
         assert self.hits is not None, 'cannot update coverages without .hits'
+        assert self.hitseqs is not None, 'cannot update coverages without .hitseqs'
         assert self.fastq is not None, 'cannot update coverages without .fastq'
 
-        for hit in self.hits:
-
+        for hit, hitseq in zip(self.hits, self.hitseqs):
             coverage = self.coverage_at(hit.seq_nr)
-            hitseq = self.fastq.readhit(hit)
             coverage.apply_hit(hit, hitseq, hit.seq_nr < len(self.coverages))
 
 
@@ -374,13 +374,14 @@ class Analyser:
         more ={}
         if hits:
             more['hits'] = self.hits
+            more['hitseqs'] = self.hitseqs
 
         return dict(
                 analyses=self.results,
                 info={
                     'format':'kvarq',
-                    'fastq':self.fastq_fname,
-                    'size':self.fastq_size,
+                    'fastq':self.fastq_filenames,
+                    'size':self.fastq_sizes,
                     'readlength':self.fastq_readlength,
                     'records_approx':self.fastq_records_approx,
                     'scantime':self.scantime,
@@ -423,8 +424,8 @@ class Analyser:
         data = convert_legacy_data(testsuites, data)
 
         self.config = data['info']['config']
-        self.fastq_fname = data['info']['fastq']
-        self.fastq_size = data['info']['size']
+        self.fastq_filenames = data['info']['fastq']
+        self.fastq_sizes = data['info']['size']
         self.fastq_readlength = data['info'].get('readlength', -1)
         self.fastq_records_approx = data['info'].get('records_approx', -1)
         self.stats = data['stats']
@@ -435,12 +436,16 @@ class Analyser:
         else:
             self.hits = None
 
-        fastqname = data['info']['fastq']
-        if os.path.isfile(fastqname):
-            lo.info('found .fastq file : ' + fastqname)
-            self.fastq = Fastq(fastqname)
+        if 'hitseqs' in data:
+            self.hitseqs = data['hitseqs']
         else:
-            lo.info('cannot load .fastq file : ' + fastqname)
+            self.hitseqs = None
+
+        if os.path.isfile(self.fastq_filenames[0]):
+            lo.info('found .fastq file : ' + self.fastq_filenames[0])
+            self.fastq = Fastq(self.fastq_filenames[0]) # always paired if possible
+        else:
+            lo.info('cannot load .fastq file : ' + self.fastq_filenames[0])
             self.fastq = None
 
         # prepare testsuites

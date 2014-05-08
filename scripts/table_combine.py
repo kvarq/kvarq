@@ -39,6 +39,7 @@ converters = {
         'str': str, # default converter
         'int': int,
         'MB': lambda x: '%.2f'%(x/1e6),
+        'MBl': lambda l: ['%.2f'%(x/1e6) for x in l],
         'median': lambda x: bisect.bisect_left(list(cumsum(x)), sum(x)/2),
         'config': lambda x: '-Q %s -o %d'% ('Azero' in x and str(ord(x['Amin'])-ord(x['Azero'])) or '?', x['minoverlap'])
     }
@@ -68,8 +69,8 @@ export_columns = (
         },
         {
             'path' : ('info', 'size'),
-            'heading' : 'filesize',
-            'converter' : 'MB'
+            'heading' : 'filesizes [MB]',
+            'converter' : 'MBl'
         },
         {
             'path' : ('info', 'readlength'),

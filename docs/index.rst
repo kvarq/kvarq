@@ -19,12 +19,12 @@ Contents
    understanding.rst
    hacking.rst
    glossary.rst
-..   ideas.rst
+   changelog.rst
 
 
-Various
--------
-
+..
+  Various
+  -------
   - :ref:`Changelog <changelog>`
 
 ..

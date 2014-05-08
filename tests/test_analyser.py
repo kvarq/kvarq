@@ -1,17 +1,5 @@
-# src : http://stackoverflow.com/questions/4398967/python-unit-testing-automatically-running-the-debugger-when-a-test-fails
-import functools, pdb, sys
-def debug_on(*exceptions):
-    if not exceptions:
-        exceptions = (AssertionError, )
-    def decorator(f):
-        @functools.wraps(f)
-        def wrapper(*args, **kwargs):
-            try:
-                return f(*args, **kwargs)
-            except exceptions:
-                pdb.post_mortem(sys.exc_info()[2])
-        return wrapper
-    return decorator 
+
+#from _util import debug_on
 
 from kvarq import engine
 from kvarq import genes
@@ -41,7 +29,6 @@ class AnalyserTest(unittest.TestCase):
         set_warning()
 
 
-    @debug_on(Exception)
     def test_encoding(self):
 
         ''' saves/loads analyser to/from file '''
@@ -63,7 +50,6 @@ class AnalyserTest(unittest.TestCase):
         assert results1 == results2
 
 
-    @debug_on(Exception)
     def test_genes(self):
 
         ''' asserts specific genes are found in crafted .fastq file '''
@@ -82,7 +68,6 @@ class AnalyserTest(unittest.TestCase):
         #assert coverages[str(resistance.RRDR)]['outliers'] == [13]
 
 
-    @debug_on(Exception)
     def test_coverage(self):
         seq = genes.Sequence('AACCGGTT')
         cov = Coverage(seq)

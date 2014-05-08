@@ -1,4 +1,6 @@
 
+.. highlight:: bash
+
 .. _installing:
 
 Installing KvarQ
@@ -15,7 +17,7 @@ http://www.siwsstph.ch/kvarq
 Note that the packages are currently **not signed** and you therefore
 have to `enable OS X to run programs from unidentified developers
 <http://www.mcvsd.org/tips/powerteacher/osx_unidentified_developers.html>`_
-if you run OS X newer than 10.8
+if you run OS X 10.8 or newer.
 
 
 .. _install-from-source:
@@ -73,28 +75,28 @@ directory)::
 
     wget https://github.com/kvarq/kvarq/archive/master.zip
     unzip master.zip
-    rm kvarq-latest.tar.gz
-    cd kvarq-*
+    rm master.zip
+    cd kvarq-master
     python setup.py test
 
-now you can **either install** kvarq (optionally into a virtual environment)::
+now you can **either install** KvarQ (optionally into a virtual environment)::
 
     python setup.py install
 
-**or setup an alias** after including kvarq into your ``PYTHONPATH``.  This is
-the method of choice if you intend to plan :ref:`to modify the kvarq source
+**or setup an alias** after including KvarQ into your ``PYTHONPATH``.  This is
+the method of choice if you intend to plan :ref:`to modify the KvarQ source
 <hacking>` because you don't need to make a fresh installation after every
 change -- but don't forget to re-run ``python setup.py test`` in case you changed
 the C source code to make sure the compiled extension is copied into the correct
-directory (see also script ``activate``)::
+directory (or by sourcing the script ``. ./activate``)::
 
     PYTHONPATH=`pwd`; export PYTHONPATH
     alias kvarq='python -m kvarq.cli'
     kvarq -h
 
 In either way, you now have the ``kvarq`` command at your disposal and can
-continue :ref:`using the commandline <using-cli>` or 
-:ref:`using the graphical user interface <using-gui>`.
+continue :ref:`using the commandline <using-cli>` or start the
+:ref:`graphical user interface <gui>`.
 
 
 .. _install-from-source-osx:
@@ -137,7 +139,7 @@ Prerequisites:
     <http://www.engthought.com/downloads/>`_ that bundles many interesting
     packages.
 
-  - Because kvarq uses a compiled module to scan through the files you will
+  - Because KvarQ uses a compiled module to scan through the files you will
     have to install a C compiler. The simplest choice is to download and
     install Microsoft Visual Studio Express (e.g. `VS Express 2012
     <http://www.microsoft.com/visualstudio/deu/downloads#d-2012-express>`_).

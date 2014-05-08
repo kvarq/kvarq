@@ -7,7 +7,7 @@ Hacking KvarQ
 This chapter is a good starting point if you intend to change anything in
 the KvarQ source code, especially in the modules :py:mod:`kvarq.genes` and
 :py:mod:`kvarq.analyse`. If you're merely interested in writing a new
-:ref:`testuite <testsuite>`, you might also find some valuable information
+:ref:`testuite <testsuites>`, you might also find some valuable information
 here in addition to the example testsuites shipped with KvarQ.  Make sure
 to have read the :ref:`overview <overview>` first.
 

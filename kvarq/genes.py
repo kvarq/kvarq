@@ -16,7 +16,7 @@ from distutils.version import StrictVersion
 new changes are introduced that break backwards-compatibility, the first number
 is increased by one. introduction of new features that retain compatibility
 with old testsuites will increase the second number by one'''
-COMPATIBILITY = '0.0'
+COMPATIBILITY = '0.1'
 
 
 class Genome:
@@ -24,20 +24,54 @@ class Genome:
     '''
     a reference genome from which base sequences can be read
 
-    currently, the file that represents the reference genome is simply a
-    sequence of the bases ``CAGT`` (``.bases`` file format)
+    currently, the file that represents the reference genome can either
+    be a simple sequence of the bases ``CAGT`` (``.bases`` file format)
+    or a FASTA file. using a ``.bases`` file is slightly more efficient
+    since the bases are not read into memory.
     '''
 
-    def __init__(self, path, identifier):
+    def __init__(self, path, identifier=None, description=None):
         '''
-        :param path: name of file to read bases from
-        :param identifier: short identifier of genome
+        :param path: name of file to read bases from; can be ``.bases``
+            file that directly contains base sequence (without any
+            whitespace) or a fiel in FASTA format
+        :param identifier: short identifier of genome; will be read from
+            FASTA file if none specified
+        :param description: text description; will also be read from
+            FASTA file if none specified
         '''
         self.path = path
         self.f = file(path,'r')
-        self.f.seek(0,2)
-        self.size = self.f.tell()
+
+        if self.f.read(1) == '>':
+            self.fasta = True
+            self.f.seek(0)
+            defline = self.f.readline()
+            idx = defline.find(' ')
+            if identifier is None:
+                if idx == -1:
+                    identifier = defline[1:]
+                else:
+                    identifier = defline[1:idx]
+            if description is None:
+                if idx != -1 and idx < len(defline):
+                    description = defline[idx + 1:]
+
+            # read whole sequence into memory
+            self.bases = ''.join([line.rstrip('\n\r')
+                    for line in self.f.readlines()])
+            self.size = len(self.bases)
+            self.f.close()
+            lo.debug('read %d bytes FASTA sequence "%s" into memory' % (
+                self.size, identifier))
+
+        else:
+            self.fasta = False
+            self.f.seek(0,2)
+            self.size = self.f.tell()
+
         self.identifier = identifier
+        self.description = description
 
     def read(self, pos, length):
         '''
@@ -45,6 +79,8 @@ class Genome:
         :param length: number of bases to read
         :returns: a base string of length ``length``
         '''
+        if self.fasta:
+            return self.bases[pos-1:pos-1 + length]
         self.f.seek(pos-1) # pos starts at 1...
         return self.f.read(length)
 
@@ -258,7 +294,7 @@ class Sequence(object):
 
 class Template(object):
 
-    ''' object with identifier that produces :py:class:`Sequence`s '''
+    ''' object with identifier that produces :py:class:`Sequence` '''
 
     def __init__(self, identifier):
         ''' subclasses must assure that the identifier is **unique**, i.e.
@@ -419,12 +455,14 @@ class SNP(TemplateFromGenome):
     mutant)
     '''
 
-    def __init__(self, genome, pos, base, orig=None):
+    def __init__(self, genome, pos, base, orig=None, force=False):
         '''
         :param genome: reference genome from which to read bases
         :param pos: position of SNP within reference genome
         :param base: mutant base
         :param orig: original base
+        :param force: do not check whether base/orig are compatible with
+            bases read from genome
         '''
 
         super(SNP, self).__init__(genome, pos, pos)
@@ -432,8 +470,9 @@ class SNP(TemplateFromGenome):
         self.base = base
         self.orig = orig
         oldbase = self.genome.read(pos, 1)
-        if orig: assert oldbase == self.orig
-        assert base != oldbase
+        if not force:
+            if orig: assert oldbase == self.orig
+            assert base != oldbase
         self.identifier = 'SNP%d%s%s'%(pos,oldbase,base)
 
     def seq(self, spacing=0):
@@ -496,7 +535,7 @@ class Test(object):
 
 
 class AnalysisException(RuntimeError):
-    ''' risen if error occurs during :py:method:`kvarq.genes.Testsuite.analyse` '''
+    ''' risen if error occurs during :py:meth:`kvarq.genes.Testsuite.analyse` '''
 
 class Testsuite(object):
 
@@ -608,8 +647,7 @@ def load_testsuite(fname):
     compat = StrictVersion(namespace['GENES_COMPATIBILITY'])
     version = StrictVersion(COMPATIBILITY)
 
-    if compat > version or compat.version[0] != version.version[0] or \
-            compat.version[1] != version.version[1]:
+    if compat > version or compat.version[0] != version.version[0]:
         raise TestsuiteLoadingException('incompatible : %s needed, got %s' %
                 (compat, version))
 

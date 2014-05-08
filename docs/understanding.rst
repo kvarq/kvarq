@@ -40,14 +40,15 @@ Overview
   Python modules/packages are colored in blue, C extensions in red.  Rectangles
   with rounded corners represent data structures passed along the way.
 
-The :ref:`testsuites <testsuites>` provide a list of **sequences**. The C
-extension :py:mod:`kvarq.engine` then scans the ``.fastq`` file and finds all
+The :ref:`testsuites <testsuites>` provide a list of **sequences**. The
+C extension :py:mod:`kvarq.engine` then scans the ``.fastq`` file and finds all
 occurrences of these sequences.  The list of these occurrences (the **hit
 list**) is then passed to the module :py:mod:`kvarq.analyser` that maps the
 reads onto the original sequences and creates **coverages** (see
-:ref:`coverages`).  This coverage is passed back to the different testsuites
-that calculates the final **results**.  The coverages are saved along with the
-results (and optionally the hit list) into the ``.json`` file.
+:py:class:`Coverage <kvarq.analyse.Coverage>`.  This coverage is passed back
+to the different testsuites that calculates the final **results**.  The
+coverages are saved along with the results (and optionally the hit list) into
+the ``.json`` file.
 
 
 Testsuites 1/2

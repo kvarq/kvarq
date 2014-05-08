@@ -1,4 +1,7 @@
+
 import math
+import gzip
+import os.path
 
 from kvarq.log import lo, tictoc
 
@@ -34,7 +37,6 @@ class FastqFileFormatException(Exception):
 
 class Fastq:
 
-
     ASCII = '!"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ' + \
             '[\]^_`abcdefghijklmnopqrstuvwxyz{|}~'
 
@@ -46,19 +48,56 @@ class Fastq:
             ('Illumina 1.8+', range(0, 42), 0)
         )
 
-    def __init__(self, fname, variant = None, dQ = None, fd=None):
+    def __init__(self, fname, variant=None, fd=None, paired=False):
+        '''
+        open ``.fastq`` or ``.fastq.gz`` file and determine its
+        variant (setting attribute ``.Azero`` accordingly)
+
+        :param fname: name of file to open
+        :param variant: specify one of ``.vendor_variants`` -- if none
+            is specified, then the PHRED score of the fastq file is
+            analyzed and
+        :param fd: specify a file descriptor to use instead of
+            opening ``fname``
+        :param paired: include second file in a paired set if it is
+            available (i.e. specify "file_1.fastq" as input file and
+            "file_2.fastq" will be included in functions ``.filesize()``
+            and ``.filenames()``)
+        '''
         self.fname = fname
 
         if fd:
             self.fd = fd
         else:
-            self.fd = open(self.fname, 'rb')
-        self.fd.seek(0,2)
-        self.size = self.fd.tell()
+            self.fd = None
 
+        if self.fname.endswith('.fastq.gz'):
+            self.gz = True
+            if not self.fd:
+                self.fd = gzip.GzipFile(self.fname, 'rb')
+        elif self.fname.endswith('.fastq'):
+            self.gz = False
+            if not self.fd:
+                self.fd = open(self.fname, 'rb')
+        else:
+            raise FastqFileFormatException(
+                        'fastq file must have extension ".fastq" or ".fastq.gz"')
+
+        # save second name of base if exists
+        self.fname2 = None
+        if paired:
+            base = fname[:fname.rindex('.fastq')]
+            if base[-2:] == '_1':
+                fname2 = base[:-2] + '_2' + fname[fname.rindex('.fastq'):]
+                if os.path.exists(fname2):
+                    lo.info('including paired file "%s"' % fname2)
+                    self.fname2 = fname2
+
+        # scan some records
         min_pos, max_pos = self.min_max_score_check_file()
         lo.debug('min_pos=%d max_pos=%d' % (min_pos, max_pos))
 
+        # create list of variants compatible with PHRED scores
         self.variants = []
         self.dQ = None
         for vendor_variant in self.vendor_variants:
@@ -69,10 +108,19 @@ class Fastq:
                 if self.dQ is None:
                     self.dQ = dQ
                 self.variants.append(name)
-                if self.dQ != dQ:
+
+                if variant is None and self.dQ != dQ:
                     raise FastqFileFormatException(
                             'PHRED scores are ambiguous : ' + str(self.variants))
                 lo.debug('compatible with ' + name)
+
+        # specified variant overrides/chooses
+        if variant is not None:
+            if not variant in self.variants:
+                raise FastqFileFormatException(
+                        'specified variant "%s" is not compatible with file'
+                        ' (valid variants are : %s' % (variant, self.variants))
+            self.variants = [variant]
 
         if self.dQ is None:
             raise FastqFileFormatException(
@@ -81,23 +129,62 @@ class Fastq:
 
         self.Azero = self.ASCII[self.dQ]
 
+        # estimate readlength/records_approx
         self.fd.seek(0)
         lines = [self.fd.readline() for i in range(4)]
         self.readlength = len(lines[1].strip('\r\n'))
-        self.records_approx = self.size / sum([len(line) for line in lines])
+        if self.gz:
+            self.records_approx = None
+        else:
+            self.records_approx = os.path.getsize(self.fname) / len(''.join(lines))
+            if self.fname2 is not None:
+                self.records_approx *= 2
 
-        lo.info('readlength=%d records_approx=%d dQ=%d variants=%s' % (
-                self.readlength, self.records_approx, self.dQ, str(self.variants)))
+        # output some infos
+        if self.gz:
+            lo.info('gzipped fastq : readlength=? records_approx=? dQ=%d variants=%s' % (
+                    self.dQ, str(self.variants)))
+        else:
+            lo.info('fastq : readlength=%d records_approx=%d dQ=%d variants=%s' % (
+                    self.readlength, self.records_approx, self.dQ, str(self.variants)))
 
+
+    def filesizes(self):
+        ''' returns list of filesize(s) -- see ``paired`` parameter in
+            :py:meth:`.__init__` '''
+        return [os.path.getsize(fname) for fname in self.filenames()]
+
+    def filenames(self):
+        ''' returns list of filename(s) -- see ``paired`` parameter in
+            :py:meth:`.__init__` '''
+        if self.fname2 is not None:
+            return [self.fname, self.fname2]
+        return [self.fname]
 
     def min_max_score_check_file(self, n=1000, points=10):
+        '''
+        check fastq file format and return min/max PHRED score values
+
+        :param n: number of records to scan
+        :param points: number of points within file to scan for records;
+            this value is ignored for gzipped fastq files
+        :returns: minimum and maximum value of PHRED score (index within
+            ``ASCII``)
+        '''
         ret_min = +999
         ret_max = -999
+        self.fd.seek(0)
+
+        if self.gz:
+            lo.debug('gzipped fastq : scan %d points at start only' % n)
+
         for point in range(points):
-            # (oversamples small files)
-            self.fd.seek(self.size*point/points)
-            if point > 0:
+
+            if not self.gz and point > 0:
+                # (oversamples small files)
+                self.fd.seek(os.path.getsize(self.fname)*point/points)
                 self.seekback()
+
             while n > (points - 1 - point)*n/points:
                 identifier = self.fd.readline().rstrip('\n\r')
                 if not identifier: break
@@ -129,9 +216,10 @@ class Fastq:
             if not identifier: break
 
         if not identifier:
-            while self.fd.tell()<self.size:
-                empty = self.fd.readline().rstrip('\n\r')
-                if not empty == '':
+            while True:
+                line = self.fd.readline()
+                if not line: break
+                if not line.rstrip('\r\n') == '':
                     raise FastqFileFormatException('non-empty line after empty line (fpos=%d'%
                             self.fd.tell())
 
@@ -160,24 +248,26 @@ class Fastq:
         return int(-10 * math.log(p)/math.log(10))
 
 
-    def Qs(self, n=1000):
-        fd = open(self.fname)
-        self.fd.seek(0)
-        Qs = []
-        for i in range(n):
-            ident, seq, plus, scores = (self.fd.readline().strip()
-                    for j in range(4))
-            if not ident: break
-            Qs.extend([self.A2Q(score) for score in scores])
-        return Qs
-
-
     def lengths(self, Amin, n=1000, points=10):
+        '''
+        samples length of quality trimmed records
+
+        :param Amin: minimum PHRED value
+        :param n: number of records to sample
+        :param points: number of points within file to scan for records;
+            this value is ignored for gzipped fastq files
+        :returns: list of quality trimmed record lengths ``n`` items
+        '''
+        self.fd.seek(0)
+
+        if self.gz:
+            lo.debug('gzipped fastq : scan %d points at start only' % n)
+
         lengths = []
         for point in range(points):
-            # (oversamples small files)
-            self.fd.seek(self.size*point/points)
-            if point > 0:
+
+            if not self.gz and point > 0:
+                self.fd.seek(os.path.getsize(self.fname)*point/points)
                 self.seekback()
 
             while n > (points - 1 - point)*n/points:
@@ -274,52 +364,4 @@ class Fastq:
     @tictoc('fastq.readhits')
     def readhits(self, hits):
         return [self.readhit(hit) for hit in hits]
-
-
-if __name__ == '__main__':
-
-    import argparse
-    import json
-    import logging
-
-    from kvarq.util import TextHist
-
-    parser = argparse.ArgumentParser(description='perform simple analysis on .fastq files')
-
-    parser.add_argument('-v', '--verbose', action='count',
-            help='show more generous information (on stdout)')
-    parser.add_argument('-d', '--debug', action='store_true',
-            help='output log information at a debug level')
-
-    parser.add_argument('-n', '--reads', type=int, default=10000,
-            help='how many reads to use for analysis')
-    parser.add_argument('-m', '--parts', type=int, default=10,
-            help='set to "1" to analyze all reads in beginning of file; set to "n" to distribute reads evenly across the whole file (more representative, but slower)')
-
-    parser.add_argument('-Q', '--quality', type=int,
-            help='show histogram of readlengths with specified quality score')
-
-    parser.add_argument('fastq', help='name of .fastq file to analyze')
-    
-    args = parser.parse_args()
-    fastq = args.fastq
-    if fastq.endswith('.json'):
-        lo.info('parsing ' + fastq)
-        data = json.load(file(fastq))
-        fastq = data['info']['fastq']
-        lo.info('analyzing ' + fastq)
-    fastq = Fastq(args.fastq)
-    if args.debug:
-        lo.setLevel(logging.DEBUG)
-
-    if args.quality:
-        Amin = fastq.Q2A(args.quality)
-        n = args.reads
-        m = args.parts
-        lengths = []
-        lo.debug('Q=%d p=%.5f Amin=%s'%(
-                args.quality, fastq.Q2p(args.quality), Amin))
-        for i in range(m):
-            lengths += fastq.lengths(Amin, n/m, fastq.size*i/m)
-        print TextHist().draw(sorted(lengths))
 

@@ -1,4 +1,6 @@
 
+.. _gui:
+
 Using KvarQ Graphical User Interface (GUI)
 ==========================================
 
@@ -6,7 +8,7 @@ Using KvarQ Graphical User Interface (GUI)
 Launching the GUI
 -----------------
 
-Depending on ref:`how kvarq was installed <installation>`, there
+Depending on :ref:`how KvarQ was installed <installing>`, there
 are different ways of launching the GUI
 
   - Installation from source: simply enter ``kvarq gui`` on the command
@@ -14,9 +16,11 @@ are different ways of launching the GUI
     is launched this way, you can use some :ref:`command line switches
     <using-cli>` (for example specify the directory containing the
     :ref:`testsuites <testsuites>`).
-  - binary installation windows: go to the directory with the kvarq
+  - Binary installation windows: go to the directory with the KvarQ
     files and start ``kvarq-gui.exe``
-  - binary installation OS X: open the kvarq application in the Finder
+  - Binary installation OS X: open the KvarQ application in the Finder
+
+Below is what you should see after launching the GUI
 
 .. image:: _static/imgs/screenshots/main.png
   :align: center
@@ -38,26 +42,25 @@ Configuring KvarQ
   :scale: 50 %
   :width: 706
 
-There are two ways how kvarq is configured:
+There are two steps to configure KvarQ:
 
-Firstly, by specifying the :ref:`testsuites <testsuites>` that are known to the
-program.  These testsuites can be loaded from different places.  If a testsuite
-with the same name already exists, it is replaced (this behaviour is intended
-to load a different version of a testsuite than the one distributed with
-kvarq).
+  1. Specify the :ref:`testsuites <testsuites>` that are known to the program.
+     These testsuites can be loaded from different places.  If a testsuite with
+     the same name already exists, it is replaced with the one specified last.
 
-The :ref:`scanner <scanner>` as well as the :ref:`explorer <explorer>` need to
-know these testsuites in order perform the scanning or correctly display the
-results.  After loading testsuites, they appear in the list (unless they were
-replacing another testsuite already listed).  From this set of available
-testsuites, a selection can be made that specifies which of the testsuites should
-be used during the scanning process.  Selecting more testsuites will slow down
-the scanning process and produce larger, more informative files.
+     The :ref:`scanner <scanner>` as well as the :ref:`explorer <explorer>`
+     need to know these testsuites in order perform the scanning or correctly
+     display the results.  After loading testsuites, they appear in the list
+     (unless they were replacing another testsuite already listed).  From this
+     set of available testsuites, a **selection** can be made that specifies
+     which of the testsuites should be used during the scanning process.
+     Selecting more testsuites will slow down the scanning process and produce
+     larger, more informative files.
 
-Secondly, the :ref:`engine configuration parameters <configuration-parameters`
-can be modified.  Usually, the default values work well, but in some cases
-(such as old low-quality files) it can be advantageous to change some of these
-values.
+  2. The :ref:`engine configuration parameters <configuration-parameters>` can
+     also be modified.  Usually, the default values work well, but in some
+     cases (such as old low-quality files) it can be advantageous to change
+     some of these values.
 
 
 .. _scanner:
@@ -213,7 +216,7 @@ signification of the displayed elements is somewhat different.
 
   Coverage of a single nucleotide polyphormism (SNP), **mutant genotype**.
 
-  Because kvarq is looking for a specific mutant sequence, the SNP is "found"
+  Because KvarQ is looking for a specific mutant sequence, the SNP is "found"
   if there is no mutation at its position, as is the case in this example
   (i.e. at position 157129 there is really a ``T`` and not a ``C``).
 

@@ -6,7 +6,7 @@
 #     from version 0.10.10 on old files should be read too)
 #   - third number : increments with every compatible change
 
-VERSION = '0.11.3'
+VERSION = '0.12.1'
 
 DOWNLOAD_URL = 'https://siwsstph.ch/kvarq'
 DOC_URL = 'http://kvarq.github.io/kvarq'

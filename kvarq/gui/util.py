@@ -72,15 +72,17 @@ def open_help(dummy=None, page='index.html', anchor=''):
         if os.path.isdir(candidate):
             path = os.path.abspath(os.path.join(candidate, page))
 
+    # unfortunately, anchors don't work under windows:
+    # http://stackoverflow.com/questions/6374761/python-webrowser-open-url-with-bookmarks-like-www-something-com-file-htmltop
     if anchor and anchor[0] != '#':
         anchor = '#' + anchor
 
     if path:
-        webbrowser.open(urlparse.urljoin('file:', urllib.pathname2url(path)) + anchor)
+        webbrowser.open(urlparse.urljoin('file:', urllib.pathname2url(path) + anchor))
 
     else:
         # fallback to online docs
-        webbrowser.open(DOC_URL)
+        webbrowser.open(DOC_URL + page + anchor)
 
 
 class BackgroundJob(tk.Tk):

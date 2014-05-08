@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <signal.h>
+#include <stdarg.h>
+
+#include "gz/miniz.c"
 
 #ifdef _WIN32 // 32/64 bit windows
 #pragma message ( "*** compiling for windows ***" )
@@ -13,11 +16,52 @@
 #define MIN(A,B) (A<B?A:B)
 #define MAX(A,B) (A>B?A:B)
 
-#if 0
+
+#if 1
 #define DBG(fmt, ...) fprintf(stderr, fmt "\n", __VA_ARGS__)
 #else
 #define DBG(...)
 #endif
+
+
+/* data structures {{{1 */
+
+typedef struct ll_item_ {
+    int seqi;
+    long fpos;
+    int spos;
+    int length;
+    int readlength;
+    struct ll_item_ *next;
+} ll_item;
+
+struct fastq_file {
+    const char **fnames; // NULL terminated
+    int fname_i;
+    const char *buf; // partial record from last read
+    size_t buf_size;
+    FILE *fd;
+    size_t size;
+    size_t fpos; // within inflated data
+    size_t ftell0; // sum of filesizes of files already read
+    int eof;
+
+    int compressed;
+    mz_stream mzs;
+    char *inbuf;
+    long remaining;
+};
+
+struct scanargs {
+    struct fastq_file *fastq;
+    char **seqlist;
+    int *seqlengths;
+    ll_item *root;
+    PyObject *pyhitseqs;
+};
+
+
+/* globals {{{1 */
 
 int running=0, stop=0;
 // see engine_config()
@@ -30,195 +74,35 @@ int domore=0;
 // synchronizing
 pthread_mutex_t ll_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t rl_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t args_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t fastq_read_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t records_parsed_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t interpreter_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t profile_mutex = PTHREAD_MUTEX_INITIALIZER;
 // python objects for interfacing etc
 PyObject *engine_mod, *hittuple;
 // python pthreads exception handling
 PyObject *exception, *fastq_exception;
+// python object for logging output
+PyObject *lo_log;
+long LOG_DEBUG, LOG_INFO, LOG_WARNING, LOG_ERROR, LOG_FATAL;
+#define LOG_BUF_SIZE 1024
 #define ERRSTR_LENGTH 1024
 char errstr[ERRSTR_LENGTH];
 
 // stats
-long total, parsed, sigints;
-int nseqs;
+size_t fastq_size_estimated, fastq_parsed;
+int sigints, nseqs;
 long *seqbasehits, *seqhits, records_parsed;
 long nrecords;
 long nN, nG, nA, nC, nT, nX;
 #define MAX_READLENGTH 1024
 long rls_longest;
 long rls_buf[MAX_READLENGTH];
-
-void add_rl(long rl)
-{
-    pthread_mutex_lock(&rl_mutex);
-    if (rl>=0 && rl<MAX_READLENGTH)
-        rls_buf[rl]++;
-    if (rl > rls_longest)
-        rls_longest = rl;
-    pthread_mutex_unlock(&rl_mutex);
-}
-
-int Amin_steps = 5;
+#define AMIN_STEPS 5
 long **all_rls_buf;
-void analyse_record(char *rstart, long blen)
-{
-    int i;
-    char *ptr,*qtr;
-    nrecords++;
-    for(ptr=rstart, i=0; i<4 && ptr-rstart<blen; ptr++) {
-        if (*ptr == '\n')
-            i++;
-        if (i == 0) switch(*ptr) {
-            case 'N': nN += 1; break;
-            case 'A': nA += 1; break;
-            case 'G': nG += 1; break;
-            case 'T': nT += 1; break;
-            case 'C': nC += 1; break;
-            default: nX += 1; break;
-        }
-    }
-    if (i<4) return;
-    for(ptr=rstart; i<3; ptr++)
-        if (*ptr == '\n')
-            i++;
-    for(i=0; i<2*Amin_steps; i++)
-        for(++ptr, qtr=ptr; *ptr!='\n'; ptr++)
-            if (*ptr<(Amin+(i<Amin_steps?-i-1:i-Amin_steps+1))) {
-                if (qtr)
-                    all_rls_buf[i][qtr-ptr>=MAX_READLENGTH ? MAX_READLENGTH-1 : ptr-qtr]++;
-                qtr = NULL;
-            } else if (!qtr) qtr=ptr;
-}
 
-void init_stats(char **seqlist)
-{
-    int i;
 
-    //FIXME : allocated structures are never freed
-
-    memset((void *) rls_buf, 0, sizeof(rls_buf));
-    rls_longest = -1;
-
-    nrecords = nA = nG = nC = nT = nN = nX = 0;
-
-    if (all_rls_buf) {
-        for(i=0; i<2*Amin_steps; i++)
-            free(all_rls_buf[i]);
-        free(all_rls_buf);
-    }
-    all_rls_buf = (long **) malloc(sizeof(long *) * Amin_steps*2);
-    for(i=0; i<2*Amin_steps; i++) {
-        all_rls_buf[i] = (long *) malloc(sizeof(long) * MAX_READLENGTH);
-        memset((void *) all_rls_buf[i], 0, sizeof(long) * MAX_READLENGTH);
-    }
-
-    for(nseqs=0; seqlist[nseqs]; nseqs++);
-    seqbasehits = (long *) malloc(sizeof(long) * nseqs);
-    memset((void *) seqbasehits, 0, sizeof(long) * nseqs);
-    seqhits = (long *) malloc(sizeof(long) * nseqs);
-    memset((void *) seqhits, 0, sizeof(long) * nseqs);
-    records_parsed = 0;
-}
-
-static PyObject *
-engine_stats(PyObject *self, PyObject *args)
-{
-    int i;
-    PyObject *rls, *sbhs, *shs;
-
-    if (!PyArg_ParseTuple(args, ""))
-        return NULL;
-
-    rls = PyTuple_New(rls_longest+1);
-    for(i=0; i<=rls_longest; i++) {
-        PyTuple_SetItem(rls, i, PyInt_FromLong(rls_buf[i]));
-        //DBG("rl=%d %ldx", i, rls_buf[i]);
-    }
-
-    sbhs = PyTuple_New(nseqs);
-    for(i=0; i<nseqs; i++)
-        PyTuple_SetItem(sbhs, i, PyInt_FromLong(seqbasehits[i]));
-
-    shs = PyTuple_New(nseqs);
-    for(i=0; i<nseqs; i++)
-        PyTuple_SetItem(shs, i, PyInt_FromLong(seqhits[i]));
-
-    // DBG("engine_stats : parsed=%li total=%li", parsed, total);
-
-    return Py_BuildValue("{sOsfsOsOsOsOsOsO}",
-            "readlengths", rls,
-            "progress", ((float) (parsed>total?total:parsed))/(total ? total : 1),
-            "nseqbasehits", sbhs,
-            "nseqhits", shs,
-            "parsed", PyInt_FromLong(parsed),
-            "total", PyInt_FromLong(total),
-            "sigints", PyInt_FromLong(sigints),
-            "records_parsed", PyInt_FromLong(records_parsed)
-        );
-}
-
-void add_records_parsed(long n) {
-    pthread_mutex_lock(&records_parsed_mutex);
-    DBG("records_parsed : %ld -> %ld", records_parsed, records_parsed + n);
-    records_parsed += n;
-    pthread_mutex_unlock(&records_parsed_mutex);
-}
-
-// hits
-typedef struct ll_item_ {
-    int seqi;
-    long fpos;
-    int spos;
-    int length;
-    int readlength;
-    struct ll_item_ *next;
-} ll_item;
-
-ll_item *add_ll(ll_item *root, int seqi, long fpos, int spos, int length, int readlength)
-{
-    pthread_mutex_lock(&ll_mutex);
-
-    //DBG("adding item seqi=%d fpos=%li spos=%i length=%i (thread %li)",
-    //        seqi, fpos, spos, length, thread_self());
-
-    while(root->next != NULL)
-        root = root->next;
-    root->next = (ll_item *) malloc(sizeof(ll_item));
-
-    if (root->next == NULL)
-    {
-        pthread_mutex_unlock(&ll_mutex);
-        return (ll_item *) PyErr_NoMemory();
-    }
-
-    root->next->seqi = seqi;
-    root->next->fpos = fpos;
-    root->next->spos = spos;
-    root->next->length = length;
-    root->next->readlength = readlength;
-    root->next->next = NULL;
-    // DBG("added %ld at %ld (thread %ld)", which, pos, thread_self());
-
-    seqbasehits[seqi] += length;
-    seqhits[seqi]++;
-
-    pthread_mutex_unlock(&ll_mutex);
-    return root->next;
-}
-
-void free_ll(ll_item *root)
-{
-    ll_item *tmp;
-
-    while(root !=NULL)
-    {
-        tmp = root->next;
-        free(root);
-        root = tmp;
-    }
-}
-
+/* signal handler {{{1 */
 
 #ifdef _WIN32 // 32/64 bit windows
 BOOL CtrlHandler(DWORD fdwCtrlType)
@@ -226,9 +110,9 @@ BOOL CtrlHandler(DWORD fdwCtrlType)
     DBG("CtrlHandler called");
     if (fdwCtrlType == CTRL_C_EVENT)
     {
-        DBG("CtrlHandler detected CTRL_C_EVENT");
-        sigints++;
-        return TRUE;
+	DBG("CtrlHandler detected CTRL_C_EVENT");
+	sigints++;
+	return TRUE;
     } 
     return FALSE;
 } 
@@ -251,42 +135,40 @@ long pthread2long(pthread_t x) {
 }
 #endif
 
-static PyObject *
-engine_stop(PyObject *self, PyObject *args)
+
+/* utility functions {{{1 */
+
+// use globals LOG_{DEBUG|INFO|WARNING|ERROR|FATAL} as first argument
+
+void lo_log_msg(int level, char *fmt, ...)
 {
-    if (!PyArg_ParseTuple(args, ""))
-        return NULL;
+    char *log_header = "[kvarq.engine] ", buf[LOG_BUF_SIZE];
+    va_list args;
 
-    stop++;
+    sprintf(buf, "%s", log_header);
+    va_start(args, fmt);
+    vsnprintf(buf + strlen(buf), LOG_BUF_SIZE - strlen(buf), fmt, args);
+    va_end(args);
 
-    Py_RETURN_NONE;
+    pthread_mutex_lock(&interpreter_mutex);
+    PyObject_CallObject(lo_log, Py_BuildValue("(is)", level, buf));
+    pthread_mutex_unlock(&interpreter_mutex);
 }
 
-
-struct scanargs {
-    int assigned;
-    char *fname; // NULL indicates end of array
-    long start;
-    long length;
-    char **seqlist;
-    int *seqlengths;
-    ll_item *root;
-    int hits;
-};
-
-void dump_record(char *startrecord, char *startread, int rl) {
+void dump_record(char *startrecord, char *startread, int rl)
+{
     int i, j;
     char t, *bases;
 
     for(i=0,j=0,bases=NULL; startrecord[i] && j<4; i++)
-        if (startrecord[i] == '\n') {
-            j++;
-            if (j == 1)
-                bases = startrecord+i+1;
-        }
+	if (startrecord[i] == '\n') {
+	    j++;
+	    if (j == 1)
+		bases = startrecord+i+1;
+	}
     if (j<4) {
-        fprintf(stderr,"*** cannot dump record; j=%d ***\n", j);
-        return;
+	fprintf(stderr,"*** cannot dump record; j=%d ***\n", j);
+	return;
     }
 
     fprintf(stderr,"<<<<<<<<<<<<<<<<\n");
@@ -297,695 +179,1259 @@ void dump_record(char *startrecord, char *startread, int rl) {
     startrecord[i] = t;
 
     for(i=0; i<startread-bases; i++)
-        fputc(' ', stderr);
+	fputc(' ', stderr);
     for(i=0; i<rl; i++)
-        fputc('*', stderr);
+	fputc('*', stderr);
     fputc('\n', stderr);
 
     fprintf(stderr,">>>>>>>>>>>>>>>>\n");
 }
 
-/** 
- * returns the minimal number of bytes that have to be discarded at the beginning
- * of buf to start with the beginning of a fastq record
- * @param buf character buffer containing fastq records
- * @param bsize length of data in buf
- * @return location of beginning of first complete record in buffer -- -1 if no
- *         record could be found
- */
 
-long forward_fastq(char *buf, size_t bsize)
+/* thread profiling {{{1 */
+
+#if 0
+
+struct profile_struct {
+    char *name;
+    long threadid;
+    clock_t clocks, running;
+};
+
+#define PROFILES_SIZE_STEP 100
+int profiles_size = 0, profiles_n = 0;
+struct profile_struct *profiles = NULL;
+
+void profile_start(char *name)
 {
-    int i, at, newlines;
-    for(i = 1, at = -1, newlines = 0; i<bsize; i++)
+    int i;
+    long threadid = thread_self();
+
+    pthread_mutex_lock(&profile_mutex);
+
+    for(i = 0; i < profiles_n; i++)
+	if (strcmp(profiles[i].name, name) == 0 &&
+		profiles[i].threadid == threadid)
+	    break;
+
+    if (i == profiles_n)
     {
-        if ((buf[i-1] == '\n' ||
-             (i>1 && buf[i-1] == '\n' && buf[i-2] == '\r') ||
-             (i>1 && buf[i-1] == '\r' && buf[i-2] == '\n'))
-             && buf[i] == '@') {
-            // it's safe to reset every time a line starts with '@'
-            // because if '@' is the first character of the phred string
-            // then the next line will be the beginning of the record
-            at = i;
-            newlines = 0;
-        }
-        if (buf[i] == '\n')
-            newlines++;
-        if (at >= 0 &&
-            (buf[i-1] == '\n' ||
-             (i>1 && buf[i-1] == '\n' && buf[i-2] == '\r') ||
-             (i>1 && buf[i-1] == '\r' && buf[i-2] == '\n'))
-             && buf[i] == '+')
-            // assume that identifier is following (checked sporadically in kvarq.fastq.Fastq)
-            break;
+	if (profiles_n == profiles_size)
+	{
+	    profiles_size += PROFILES_SIZE_STEP;
+	    profiles = realloc(profiles, sizeof(struct profile_struct) * profiles_size);
+	}
+	profiles[i].name = name;
+	profiles[i].threadid = threadid;
+	profiles[i].clocks = 0;
+	profiles[i].running = 0;
+
+	profiles_n++;
     }
 
-    return (at >= 0 && i < bsize) ? at : -1;
+    profiles[i].running = clock();
+
+    pthread_mutex_unlock(&profile_mutex);
 }
 
-
-void scan_filepart(struct scanargs *args)
+void profile_stop(char *name)
 {
-    FILE *fd;
-    char *buf, *ptr, *rstart, *rnext, *startread, *plus, *startlongest, *startscore, *seq, *qtr;
-    size_t bl;
-    long pos, left, recordi;
-    int i, j, e, lines, seqi, hits, seql, rl;
-    ll_item *tail;
-    long buf_recs, buf_tooshort;
+    int i;
+    long threadid = thread_self();
+
+    pthread_mutex_lock(&profile_mutex);
+
+    for(i = 0; i < profiles_n; i++)
+	if (strcmp(profiles[i].name, name) == 0 &&
+		profiles[i].threadid == threadid)
+	    break;
+
+    profiles[i].clocks += clock() - profiles[i].running;
+    profiles[i].running = 0;
+
+    pthread_mutex_unlock(&profile_mutex);
+}
+
+void profile_dump()
+{
+    int i;
+
+    fputc('\n', stderr);
+    for(i = 0; i < profiles_n; i++)
+	fprintf(stderr, "[%ld] %12s clocks=%10ld running=%ld\n",
+		profiles[i].threadid, profiles[i].name,
+		profiles[i].clocks, profiles[i].running);
+    fputc('\n', stderr);
+}
+
+#else
+
+int profiles_n = 0;
+
+void profile_start(char *name) {}
+void profile_stop(char *name) {}
+void profile_dump() {}
+
+#endif
+
+
+/* stats functions {{{1 */
+
+/* init {{{2 */
+
+void init_stats(char **seqlist)
+{
+    int i;
+
+    //FIXME : allocated structures are never freed
+
+    memset((void *) rls_buf, 0, sizeof(rls_buf));
+    rls_longest = -1;
+
+    nrecords = nA = nG = nC = nT = nN = nX = 0;
+
+    if (all_rls_buf) {
+	for(i=0; i<2*AMIN_STEPS; i++)
+	    free(all_rls_buf[i]);
+	free(all_rls_buf);
+    }
+    all_rls_buf = (long **) malloc(sizeof(long *) * AMIN_STEPS*2);
+    for(i=0; i<2*AMIN_STEPS; i++) {
+	all_rls_buf[i] = (long *) malloc(sizeof(long) * MAX_READLENGTH);
+	memset((void *) all_rls_buf[i], 0, sizeof(long) * MAX_READLENGTH);
+    }
+
+    for(nseqs=0; seqlist[nseqs]; nseqs++);
+    seqbasehits = (long *) malloc(sizeof(long) * nseqs);
+    memset((void *) seqbasehits, 0, sizeof(long) * nseqs);
+    seqhits = (long *) malloc(sizeof(long) * nseqs);
+    memset((void *) seqhits, 0, sizeof(long) * nseqs);
+    records_parsed = 0;
+}
+
+/* add infos {{{2 */
+
+void analyse_record(char *rstart, long blen)
+{
+    int i;
+    char *ptr,*qtr;
+    nrecords++;
+    for(ptr=rstart, i=0; i<4 && ptr-rstart<blen; ptr++) {
+	if (*ptr == '\n')
+	    i++;
+	if (i == 0) switch(*ptr) {
+	    case 'N': nN += 1; break;
+	    case 'A': nA += 1; break;
+	    case 'G': nG += 1; break;
+	    case 'T': nT += 1; break;
+	    case 'C': nC += 1; break;
+	    default: nX += 1; break;
+	}
+    }
+    if (i<4) return;
+    for(ptr=rstart; i<3; ptr++)
+	if (*ptr == '\n')
+	    i++;
+    for(i=0; i<2*AMIN_STEPS; i++)
+	for(++ptr, qtr=ptr; *ptr!='\n'; ptr++)
+	    if (*ptr<(Amin+(i<AMIN_STEPS?-i-1:i-AMIN_STEPS+1))) {
+		if (qtr)
+		    all_rls_buf[i][qtr-ptr>=MAX_READLENGTH ? MAX_READLENGTH-1 : ptr-qtr]++;
+		qtr = NULL;
+	    } else if (!qtr) qtr=ptr;
+}
+
+void add_records_parsed(long n) {
+    pthread_mutex_lock(&records_parsed_mutex);
+    // DBG("records_parsed : %ld -> %ld", records_parsed, records_parsed + n);
+    records_parsed += n;
+    pthread_mutex_unlock(&records_parsed_mutex);
+}
+
+void add_rl(long rl)
+{
+    pthread_mutex_lock(&rl_mutex);
+    if (rl>=0 && rl<MAX_READLENGTH)
+	rls_buf[rl]++;
+    if (rl > rls_longest)
+	rls_longest = rl;
+    pthread_mutex_unlock(&rl_mutex);
+}
+
+/* findseqs {{{1 */
+
+/* adding hits {{{2 */
+
+ll_item *add_hit(ll_item *item, int seqi, long fpos, int spos, int length, int readlength, PyObject *pyhitseqs, char *hitseq)
+{
+    PyObject *pyhitseq;
+    pthread_mutex_lock(&ll_mutex);
+
+    //DBG("adding item seqi=%d fpos=%li spos=%i length=%i (thread %li)",
+    //        seqi, fpos, spos, length, thread_self());
+
+    while(item->next != NULL)
+	item = item->next;
+    item->next = (ll_item *) malloc(sizeof(ll_item));
+
+    if (item->next == NULL)
+    {
+	pthread_mutex_unlock(&ll_mutex);
+	return (ll_item *) PyErr_NoMemory();
+    }
+
+    item->next->seqi = seqi;
+    item->next->fpos = fpos;
+    item->next->spos = spos;
+    item->next->length = length;
+    item->next->readlength = readlength;
+    item->next->next = NULL;
+    // DBG("added %ld at %ld (thread %ld)", which, pos, thread_self());
+
+    seqbasehits[seqi] += length;
+    seqhits[seqi]++;
+
+    pyhitseq = PyString_FromStringAndSize(hitseq, length);
+    PyList_Append(pyhitseqs, pyhitseq);
+    Py_XDECREF(pyhitseq);
+
+    pthread_mutex_unlock(&ll_mutex);
+    return item->next;
+}
+
+void free_ll(ll_item *root)
+{
+    ll_item *tmp;
+
+    while(root !=NULL)
+    {
+	tmp = root->next;
+	free(root);
+	root = tmp;
+    }
+}
+
+/* read from .fastq files {{{2 */
+
+/**
+ * opens next file in sequence of fastq->fnames
+ *
+ * this next file can be a .fastq or .fastq.gz file regardless of
+ * whether the last file type (although time estimates will be totally
+ * wrong if filetypes are mixed)
+ *
+ * @param fastq fastq_structure where fastq_i points to file that
+ *     should be opened next
+ * @return 0 in case of success, -1 in case of error (globals exception
+ *     and errstr are set accordingly)
+ */
+
+int fastq_open_next(struct fastq_file *fastq)
+{
+    const char *fname;
+
+    if (fastq->fname_i > 0) {
+	// close open file & add bytes already read
+	fastq->ftell0 += ftell(fastq->fd);
+	fclose(fastq->fd);
+    }
+
+    fname = fastq->fnames[fastq->fname_i];
+    fastq->fname_i++;
 
     // CAREFUL : opening the file in mode "r" will result in '\r' being discarded
     //           from the bytes read into buffer !
-    fd = fopen(args->fname,"rb");
-    if (fd == NULL)
+    fastq->fd = fopen(fname,"rb");
+    if (fastq->fd == NULL)
     {
-        exception = PyExc_MemoryError;
-        strncpy(errstr, "cannot open file", ERRSTR_LENGTH);
-        return;
+	exception = PyExc_IOError;
+	snprintf(errstr, ERRSTR_LENGTH, "cannot open file");
+	return -1;
     }
+
+    if (strcmp(fname + strlen(fname) - 3, ".gz") == 0)
+    {
+	// initialize datastructure for inflating
+	fastq->compressed = 1;
+
+	if (mz_inflateInit2(&fastq->mzs, -MZ_DEFAULT_WINDOW_BITS) != MZ_OK)
+	{
+	    fclose(fastq->fd);
+	    exception = PyExc_RuntimeError;
+	    snprintf(errstr, ERRSTR_LENGTH, "cannot mz_inflateInit()");
+	    return -1;
+	}
+
+	fastq->inbuf = malloc(SCANBUFSIZE);
+	if (fastq->inbuf == NULL)
+	{
+	    fclose(fastq->fd);
+	    exception = PyExc_MemoryError;
+	    snprintf(errstr, ERRSTR_LENGTH, "cannot allocate inbuf");
+	    return -1;
+	}
+
+	fastq->mzs.next_in = (const unsigned char *) fastq->inbuf;
+	fseek(fastq->fd, 0, SEEK_END);
+	fastq->remaining = ftell(fastq->fd) - 10 - 8; // assume 10 bytes header
+	fseek(fastq->fd, 10, SEEK_SET); // assume 10 bytes header
+
+	// random guess
+	fastq_size_estimated *= 3;
+    }
+
+    return 0;
+}
+
+/**
+ * opens a .fastq file for further access via fastq_read
+ *
+ * also initializes globals fastq_size_estimated and fastq_parsed
+ *
+ * @param fnames NULL terminated array of paths of the .fastq files
+ * @return pointer to fastq file object or NULL in case of error
+ *         (PyErr_SetString called with appropriate arguments)
+ */
+
+struct fastq_file *fastq_open(const char **fnames)
+{
+    struct fastq_file *fastq;
+    int i;
+    FILE *fd;
+
+    fastq = (struct fastq_file *) malloc(sizeof(struct fastq_file));
+    if (fastq == NULL)
+    {
+	exception = PyExc_MemoryError;
+	snprintf(errstr, ERRSTR_LENGTH, "cannot allocate struct fastq_file");
+	return NULL;
+    }
+
+    memset(fastq, 0, sizeof(struct fastq_file));
+    fastq->fnames = fnames;
+
+    // determine overall file size
+    for(i = 0; fastq->fnames[i]; i++)
+    {
+	fd = fopen(fastq->fnames[i], "rb");
+	if (fd == NULL)
+	{
+	    free(fastq);
+	    exception = PyExc_IOError;
+	    snprintf(errstr, ERRSTR_LENGTH,
+		    "cannot open file '%s' for getting filesize", fastq->fnames[i]);
+	    return NULL;
+	}
+	fseek(fd, 0, SEEK_END);
+	fastq->size += ftell(fd);
+	fclose(fd);
+    }
+
+    // initialize globals fastq_parsed, fastq_size_estimated
+    fastq_parsed = 0;
+    fastq_size_estimated = fastq->size;
+
+    if (fastq_open_next(fastq) != 0)
+    {
+	free(fastq);
+	return NULL;
+    }
+
+    return fastq;
+}
+
+/**
+ * get length of last partial fastq record in buffer
+ *
+ * @param buf data read from .fastq file
+ * @param n length of data in buf
+ * @return length of last partial record in buf; -1 if no partial buf found at end
+ */
+
+int fastq_rewind(char *buf, int n)
+{
+
+    // we scan for /^\+/ (line3) and then accept the next /^@/ (line1) as the
+    // beginning of a record note that /^\+/ could also be a PHRED score
+    // therefore accept a repeated /^\+/ as the "real" line3
+
+    int state = 0; // 1=found line3
+    int i = 1;
+
+    while (i + 1 < n)
+    {
+	if (buf[n - i] == '+' && 
+		(buf[n - i - 1] == '\n' || buf[n - i - 1] == '\r'))
+	    state = 1; // state might have been 0 OR 1 (see note above)
+	else if (state == 1 && buf[n - i] == '@' &&
+		(buf[n - i - 1] == '\n' || buf[n - i - 1] == '\r'))
+	    return i;
+	i++;
+    }
+
+    return -1;
+}
+
+/**
+ * reads content from a .fastq file -- multithread safe
+ *
+ * also updates globals fastq_size_estimated and fastq_parsed
+ *
+ * @param fastq pointer as returned by fastq_open
+ * @param buf where the read data is aved
+ * @param buf_size maximum number of bytes that can be saved in buf
+ * @param fposp pointer to file position of first byte in buffer
+ *
+ * @return number of bytes read; this is normally smaller than buf_size
+ *         and the last character is guaranteed to be the end of a
+ *         record (unless the file ends with a partial record).
+ *         returns 0 if EOF is encountered and -1 in case of error
+ *         (with exception/errstr globals accordingly set)
+ */
+
+size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *fposp)
+{
+    size_t n, leftovers, m;
+    int status;
+    unsigned int avail_in, avail_out;
+
+    profile_start("fastq_read");
+    pthread_mutex_lock(&fastq_read_mutex);
+
+    // eof? open next file if available
+    if (fastq->eof != 0)
+	if (fastq->fnames[fastq->fname_i] != NULL)
+	    if (fastq_open_next(fastq) != 0)
+		return -1;
+
+    // copy partial record from last read
+    if (fastq->buf_size > 0)
+    {
+	if (fastq->buf_size > buf_size) {
+	    exception = PyExc_RuntimeError;
+	    strncpy(errstr, "buf_size < fastq->buf_size !", ERRSTR_LENGTH);
+
+	    pthread_mutex_unlock(&fastq_read_mutex);
+	    profile_stop("fastq_read");
+	    return -1;
+	}
+
+	leftovers = MIN(buf_size, fastq->buf_size);
+	memcpy(buf, fastq->buf, leftovers);
+	free((void *) fastq->buf);
+	fastq->buf_size = 0;
+
+    } else {
+	leftovers = 0;
+    }
+
+    // first byte of buffer within (inflated) file
+    *fposp = fastq->fpos - leftovers;
+    n = 0;
+    fastq->eof = 0;
+
+    if (fastq->compressed)
+    {
+	// read compressed data
+	fastq->mzs.next_out = (unsigned char *) (buf + leftovers);
+	fastq->mzs.avail_out = buf_size - leftovers;
+	do
+	{
+	    // fill up (deflated) inbuf if empty
+	    if (fastq->mzs.avail_in == 0)
+	    {
+		m = MIN(SCANBUFSIZE, fastq->remaining);
+		if (fread(fastq->inbuf, 1, m, fastq->fd) != m)
+		{
+		    exception = PyExc_IOError;
+		    strncpy(errstr, "could not read enough bytes from .fastq.gz", ERRSTR_LENGTH);
+		    if (ferror(fastq->fd) != 0)
+			strcat(errstr, " : I/O error");
+		    if (feof(fastq->fd) != 0)
+			strcat(errstr, " : premature EOF");
+
+		    pthread_mutex_unlock(&fastq_read_mutex);
+		    profile_stop("fastq_read");
+		    return -1;
+		}
+		fastq->mzs.next_in = (const unsigned char *) fastq->inbuf;
+		fastq->mzs.avail_in = m;
+		fastq->remaining -= m;
+	    }
+
+	    // inflate inbuf -> buf
+	    avail_in = fastq->mzs.avail_in;
+	    avail_out = fastq->mzs.avail_out;
+	    status = inflate(&fastq->mzs, Z_SYNC_FLUSH);
+
+	    if ((status != MZ_OK) && (status != MZ_STREAM_END))
+	    {
+		exception = PyExc_IOError;
+		snprintf(errstr, ERRSTR_LENGTH,
+			"error while inflating compressed data : status=%d"
+			" fpos=%ld ftell=%ld+%ld avail_in=%d",
+			status, fastq->fpos, fastq->ftell0, ftell(fastq->fd),
+			fastq->mzs.avail_in);
+		// strncpy(errstr, "error while inflating compressed data", ERRSTR_LENGTH);
+
+		pthread_mutex_unlock(&fastq_read_mutex);
+		profile_stop("fastq_read");
+		return -1;
+	    }
+
+	    // update n
+	    n += avail_out - fastq->mzs.avail_out;
+	    /*
+	    DBG("fastq_read [%li] : inflated %d -> %d bytes",
+		    thread_self(),
+		    avail_in - fastq->mzs.avail_in, avail_out - fastq->mzs.avail_out);
+	    */
+
+	} while(status != MZ_STREAM_END && fastq->mzs.avail_out > 0);
+
+	// update guess
+	fastq_size_estimated = (size_t) (
+		(float) fastq->size * (fastq->fpos + n) / (fastq->ftell0 + ftell(fastq->fd)));
+
+	if (fastq->remaining == 0 && status == MZ_STREAM_END)
+	    fastq->eof = 1;
+    }
+    else
+    {
+	// read uncompressed data
+	//TODO? mmap instead of read : efficiency vs compatability
+	n += fread((void *) (buf + leftovers), 1, buf_size - leftovers, fastq->fd);
+
+	if (ferror(fastq->fd) != 0) {
+	    exception = PyExc_IOError;
+	    strncpy(errstr, "error while reading from file in fastq_read", ERRSTR_LENGTH);
+
+	    pthread_mutex_unlock(&fastq_read_mutex);
+	    profile_stop("fastq_read");
+	    return -1;
+	}
+
+	if (feof(fastq->fd) != 0)
+	    fastq->eof = 1;
+    }
+
+    if (n == 0) {
+	// DBG("fastq_read [%li] : reached end of file", thread_self());
+	pthread_mutex_unlock(&fastq_read_mutex);
+	profile_stop("fastq_read");
+	return leftovers + n;
+    }
+
+    // DBG("updating filepos %ld -> %ld", fastq->fpos, fastq->fpos + n);
+    fastq->fpos += n;
+    fastq_parsed += n;
+
+    if (fastq->eof == 0)
+    {
+	// save partial record at end to bufer
+	fastq->buf_size = fastq_rewind(buf, leftovers + n);
+
+	if (fastq->buf_size == -1) {
+	    exception = PyExc_RuntimeError;
+	    snprintf(errstr, ERRSTR_LENGTH,
+		    "could find beginning of record; read %ld bytes up to %ld",
+		    n, ftell(fastq->fd));
+
+	    pthread_mutex_unlock(&fastq_read_mutex);
+	    profile_stop("fastq_read");
+	    return -1;
+	}
+	if (fastq->buf_size > 0) {
+	    fastq->buf = (char *) malloc(fastq->buf_size);
+	    if (fastq->buf == NULL)
+	    {
+		exception = PyExc_MemoryError;
+		PyErr_SetString(PyExc_MemoryError, "cannot allocate new fastq->buf");
+		profile_stop("fastq_read");
+		return -1;
+	    }
+	    memcpy((void *) fastq->buf, buf + leftovers + n - fastq->buf_size,
+		    fastq->buf_size);
+	}
+    }
+
+    /*
+    DBG("fastq_read [%li] : read %ld=(%ld+%ld+%ld) bytes -> fpos=%ld",
+	    thread_self(), leftovers + n + fastq->buf_size,
+	    leftovers, n, fastq->buf_size,
+	    fastq->fpos);
+    */
+
+    pthread_mutex_unlock(&fastq_read_mutex);
+    profile_stop("fastq_read");
+    return leftovers + n - fastq->buf_size;
+}
+
+void fastq_close(struct fastq_file *fastq)
+{
+    fclose(fastq->fd);
+    if (fastq->buf_size)
+	free((void *) fastq->buf);
+    if (fastq->compressed)
+	free((void *) fastq->inbuf);
+    free(fastq);
+}
+
+/* scan_filepart {{{2 */
+
+/**
+ * scans .fastq file one BUFSIZE at a time
+ *
+ * sets globals exception, errstr if exception occured
+ */
+
+void scan_filepart(struct scanargs *args)
+{
+    char *buf, *ptr, *rstart, *rnext, *startread, *plus, *startlongest, *startscore, *seq, *qtr;
+    size_t bl;
+    size_t fpos;
+    long recordi;
+    int i, j, e, lines, seqi, seql, rl;
+    ll_item *tail;
+    long buf_recs, buf_tooshort;
 
     buf = (char *) malloc(SCANBUFSIZE);
     if (buf == NULL)
     {
-        exception = PyExc_MemoryError;
-        strncpy(errstr, "cannot allocate memory for scanning", ERRSTR_LENGTH);
-        fclose(fd);
-        return;
+	exception = PyExc_MemoryError;
+	strncpy(errstr, "cannot allocate memory for scanning", ERRSTR_LENGTH);
+	return;
     }
-
-    hits = 0;
 
     tail = args->root; // set to NULL if add_ll can't allocate memory
     recordi = -1;
-    // read file chunk buf by buf
-    for(pos=args->start,left=args->length; left>0 && !stop;)
+
+    // read file buf by buf {{{3
+    while((bl = fastq_read(args->fastq, buf, SCANBUFSIZE, &fpos)) > 0
+	    && exception == NULL && stop == 0)
     {
-        //TODO? mmap instead of read : efficiency vs compatability
-        fseek(fd, pos, SEEK_SET);
-        bl = fread((void *) buf, 1, MIN(left,SCANBUFSIZE), fd);
-        // rnext[0] == '@' (1st byte of next record)
-        rnext = buf;
+	profile_start("scan buf");
 
-        // DBG("read %li bytes (thread %li)", bl, thread_self());
+	// rnext[0] == '@' (1st byte of next record)
+	rnext = buf;
 
-        // loop over reads in buf
-        buf_recs = buf_tooshort = 0;
-        while(rnext-buf<bl)
-        {
-            rstart = rnext;
+	// DBG("read %li bytes (thread %li)", bl, thread_self());
 
-            if (domore)
-                analyse_record(rstart, bl-(rstart-buf));
+	// loop over reads in buf {{{4
+	buf_recs = buf_tooshort = 0;
+	while(rnext - buf < bl)
+	{
+	    rstart = rnext;
 
-            // "parse" record
-            for(ptr=rstart,lines=0,rl=-1,startread=NULL,startscore=NULL,plus=NULL;
-                    lines<4 && ptr-buf<bl;
-                    ptr++)
-                if (*ptr == '\n')
-                {
-                    lines++;
-                    if (lines == 1)
-                        startread = ptr+1;
-                    if (lines == 2)
-                        plus = ptr+1;
-                    if (lines == 3)
-                        startscore = ptr+1;
-                }
+	    if (domore)
+		analyse_record(rstart, bl-(rstart-buf));
 
-            // don't process partial records
-            if (lines<4)
-                break;
+	    // "parse" record
+	    for(ptr=rstart,lines=0,rl=-1,startread=NULL,startscore=NULL,plus=NULL;
+		    lines<4 && ptr-buf<bl;
+		    ptr++)
+		if (*ptr == '\n')
+		{
+		    lines++;
+		    if (lines == 1)
+			startread = ptr+1;
+		    if (lines == 2)
+			plus = ptr+1;
+		    if (lines == 3)
+			startscore = ptr+1;
+		}
 
-            // .fastq file format sanity checks
-            if (*rstart != '@') {
-                exception = fastq_exception;
-                snprintf(errstr, ERRSTR_LENGTH, "record must start with '@' (and not '%c') fpos=%ld [junk %ld+%ld]",
-                        *rstart, pos + (rstart-buf), args->start, args->length);
-                fclose(fd);
-                return;
-            }
-            if (*plus != '+') {
-                exception = fastq_exception;
-                snprintf(errstr, ERRSTR_LENGTH, "3rd line of record must start with '+' fpos=%ld [junk %ld+%ld]",
-                        pos + (plus-buf), args->start, args->length);
-                fclose(fd);
-                return;
-            }
+	    // don't process partial records
+	    if (lines<4)
+		break;
 
-            buf_recs++;
+	    // .fastq file format sanity checks
+	    if (*rstart != '@') {
+		exception = fastq_exception;
+		snprintf(errstr, ERRSTR_LENGTH, "record must start with '@' (and not '%c') "
+			"fpos=%ld", *rstart, fpos + (rstart-buf));
+		return;
+	    }
+	    if (*plus != '+') {
+		exception = fastq_exception;
+		snprintf(errstr, ERRSTR_LENGTH, "3rd line of record must start with '+' fpos=%ld",
+			fpos + (plus-buf));
+		return;
+	    }
 
-            rnext = ptr;
+	    buf_recs++;
 
-            // find longest read with good enough quality
-            for(ptr=startscore, qtr=startscore, rl=0;
-                    ptr==startscore || *(ptr-1)!='\n';
-                    ptr++)
-                if (*ptr>=Amin) { // '\n' as well as '\r' are <Amin
-                    if (!qtr) qtr = ptr;
-                } else {
-                    if (qtr) {
-                        if ((int) (ptr-qtr) > rl) {
-                            rl = (int) (ptr-qtr);
-                            startlongest = qtr;
-                        }
-                        qtr = NULL;
-                    }
-                }
-            add_rl(rl);
-            startread += startlongest-startscore;
+	    rnext = ptr;
 
-            // dump_record(rstart, startread, rl);
+	    // find longest read with good enough quality
+	    for(ptr=startscore, qtr=startscore, rl=0;
+		    ptr==startscore || *(ptr-1)!='\n';
+		    ptr++)
+		if (*ptr>=Amin) { // '\n' as well as '\r' are <Amin
+		    if (!qtr) qtr = ptr;
+		} else {
+		    if (qtr) {
+			if ((int) (ptr-qtr) > rl) {
+			    rl = (int) (ptr-qtr);
+			    startlongest = qtr;
+			}
+			qtr = NULL;
+		    }
+		}
+	    add_rl(rl);
+	    startread += startlongest-startscore;
 
-            /*
-            if (rl==0) {
-                char tmpbuf[1024], *tmpptr;
-                memset((void *) tmpbuf, 0, sizeof(tmpbuf));
-                for(tmpptr=startscore; *tmpptr!='\n'; tmpptr++)
-                    tmpbuf[tmpptr-startscore] = *tmpptr;
-                DBG("thread=%ld start=%ld length=%ld", thread_self(), args->start, args->length);
-                DBG("rl=%d pos=%ld rstart=%p buf=%p startread=%p startscore=%p ptr=%p qtr=%p",
-                        rl, pos, rstart, buf, startread, startscore, ptr, qtr);
+	    // dump_record(rstart, startread, rl);
 
-                DBG("score=%s", tmpbuf);
-            }
-            */
+	    /*
+	       if (rl==0) {
+	       char tmpbuf[1024], *tmpptr;
+	       memset((void *) tmpbuf, 0, sizeof(tmpbuf));
+	       for(tmpptr=startscore; *tmpptr!='\n'; tmpptr++)
+	       tmpbuf[tmpptr-startscore] = *tmpptr;
+	       DBG("thread=%ld start=%ld length=%ld", thread_self(), args->start, args->length);
+	       DBG("rl=%d fpos=%ld rstart=%p buf=%p startread=%p startscore=%p ptr=%p qtr=%p",
+	       rl, fpos, rstart, buf, startread, startscore, ptr, qtr);
 
-            /*
-            DBG("parsed : lines=%i startread=%i+%i rl=%i", lines, (int) (startread-buf), (int) (startlongest-startread), (int) rl);
-            startread[rl] = 0;
-            DBG("  %s", startread);
-            startlongest[rl] = 0;
-            DBG("  %s", startlongest);
-            */
+	       DBG("score=%s", tmpbuf);
+	       }
+	       */
 
-            recordi += 1;
-            // DBG("record %li rl=%i fpos(rstart)=%li (thread %li)",
-            //         recordi, rl, pos+(rstart-buf), thread_self());
+	    /*
+	       DBG("parsed : lines=%i startread=%i+%i rl=%i", lines, (int) (startread-buf), (int) (startlongest-startread), (int) rl);
+	       startread[rl] = 0;
+	       DBG("  %s", startread);
+	       startlongest[rl] = 0;
+	       DBG("  %s", startlongest);
+	       */
 
-            if (rl<minreadlength) {
-                buf_tooshort++;
-                continue;
-            }
+	    recordi += 1;
+	    // DBG("record %li rl=%i fpos(rstart)=%li (thread %li)",
+	    //    recordi, rl, fpos+(rstart-buf), thread_self());
 
-            // DBG("trying record %li (thread %li)", recordi, thread_self());
-            // find sequences
-            for(seqi=0; args->seqlist[seqi]!=NULL && tail != NULL; seqi++)
-            {
-                seq = args->seqlist[seqi];
-                seql= args->seqlengths[seqi];
+	    if (rl<minreadlength) {
+		buf_tooshort++;
+		continue;
+	    }
 
-                if (rl>minoverlap && seql>minoverlap)
-                {
-                    // (tail of) read overlaps beginning of sequence
-                    // (rl-i<=seql-1) not to count bordercase here and in "read withing seq"
-                    for(i=rl-minoverlap; i>0 && rl-i<=seql-1; i--)
-                    {
-                        for(j=0,e=0; i+j<rl && e<=maxerrors; j++)
-                            if (startread[i+j] != seq[j])
-                                e++;
-                        if (e > maxerrors)
-                            continue;
-                        hits++;
-                        // DBG("adding read where tail overlaps i=%i", i);
-                        tail = add_ll(tail, seqi, pos+(startread-buf), -i, rl-i, rl);
-                        if (tail == NULL) break;
-                    }
+	    // DBG("trying record %li (thread %li)", recordi, thread_self());
+	    // find sequences
+	    for(seqi=0; args->seqlist[seqi]!=NULL && tail != NULL; seqi++)
+	    {
+		seq = args->seqlist[seqi];
+		seql= args->seqlengths[seqi];
 
-                    // (start of) read overlaps end of sequence
-                    for(i=seql-minoverlap; i>0 && seql-i<=rl; i--)
-                    {
-                        for(j=0,e=0; i+j<seql && e<=maxerrors; j++)
-                            if (seq[i+j] != startread[j])
-                                e++;
-                        if (e > maxerrors)
-                            continue;
-                        hits++;
-                        // DBG("adding read where start overlaps i=%i", i);
-                        tail = add_ll(tail, seqi, pos+(startread-buf), i, seql-i, rl);
-                        if (tail == NULL) break;
-                    }
-                }
+		if (rl>minoverlap && seql>minoverlap)
+		{
+		    // (tail of) read overlaps beginning of sequence
+		    // (rl-i<=seql-1) not to count bordercase here and in "read withing seq"
+		    for(i=rl-minoverlap; i>0 && rl-i<=seql-1; i--)
+		    {
+			for(j=0,e=0; i+j<rl && e<=maxerrors; j++)
+			    if (startread[i+j] != seq[j])
+				e++;
+			if (e > maxerrors)
+			    continue;
+			// DBG("adding read where tail overlaps i=%i", i);
+			tail = add_hit(tail, seqi, fpos+(startread-buf), -i, rl-i, rl,
+				args->pyhitseqs, startread + i);
+			if (tail == NULL) break;
+		    }
 
-                if (rl>seql)
-                {
-                    // sequence within read
-                    for(i=0; i<=rl-seql; i++)
-                    {
-                        for(j=0,e=0; j<seql && e<=maxerrors; j++)
-                            if (startread[i+j] != seq[j])
-                                e++;
-                        if (e > maxerrors)
-                            continue;
-                        hits++;
-                        // DBG("adding sequence within read i=%i ", i);
-                        tail = add_ll(tail, seqi, pos+(startread-buf), -i, seql, rl);
-                        if (tail == NULL) break;
-                    }
-                }
-                else
-                {
-                    // read within sequence
-                    for(i=0; i<=seql-rl; i++)
-                    {
-                        for(j=0,e=0; j<rl && e<=maxerrors; j++)
-                            if (seq[i+j] != startread[j])
-                                e++;
-                        if (e > maxerrors)
-                            continue;
-                        hits++;
-                        // DBG("adding read within sequence i=%i ", i);
-                        tail = add_ll(tail, seqi, pos+(startread-buf), i, rl, rl);
-                    }
-                }
-            }
+		    // (start of) read overlaps end of sequence
+		    for(i=seql-minoverlap; i>0 && seql-i<=rl; i--)
+		    {
+			for(j=0,e=0; i+j<seql && e<=maxerrors; j++)
+			    if (seq[i+j] != startread[j])
+				e++;
+			if (e > maxerrors)
+			    continue;
+			// DBG("adding read where start overlaps i=%i", i);
+			tail = add_hit(tail, seqi, fpos+(startread-buf), i, seql-i, rl,
+				args->pyhitseqs, startread);
+			if (tail == NULL) break;
+		    }
+		}
 
-            if (tail == NULL)
-            {
-                free(buf);
-                exception = PyExc_MemoryError;
-                strncpy(errstr, "cannot allocate memory for results", ERRSTR_LENGTH);
-                fclose(fd);
-                return;
-            }
+		if (rl>seql)
+		{
+		    // sequence within read
+		    for(i=0; i<=rl-seql; i++)
+		    {
+			for(j=0,e=0; j<seql && e<=maxerrors; j++)
+			    if (startread[i+j] != seq[j])
+				e++;
+			if (e > maxerrors)
+			    continue;
+			// DBG("adding sequence within read i=%i ", i);
+			tail = add_hit(tail, seqi, fpos+(startread-buf), -i, seql, rl,
+				args->pyhitseqs, startread + i);
+			if (tail == NULL) break;
+		    }
+		}
+		else
+		{
+		    // read within sequence
+		    for(i=0; i<=seql-rl; i++)
+		    {
+			for(j=0,e=0; j<rl && e<=maxerrors; j++)
+			    if (seq[i+j] != startread[j])
+				e++;
+			if (e > maxerrors)
+			    continue;
+			// DBG("adding read within sequence i=%i ", i);
+			tail = add_hit(tail, seqi, fpos+(startread-buf), i, rl, rl,
+				args->pyhitseqs, startread);
+		    }
+		}
+	    }
 
-        } // end : loop over reads in buf
-        add_records_parsed(buf_recs);
+	    if (tail == NULL)
+	    {
+		free(buf);
+		exception = PyExc_MemoryError;
+		strncpy(errstr, "cannot allocate memory for results", ERRSTR_LENGTH);
+		return;
+	    }
 
-        // incomplete record at end of chunk : break loop
-        if (rnext == buf)
-            break;
+	}
+	// end : loop over reads in buf }}}4
+	add_records_parsed(buf_recs);
 
-        pos += rnext-buf;
-        left -= rnext-buf;
-        parsed++;
-        //DBG("parsed %li -> %li (parsed=%li) recs=%i tooshort=%i",
-        //        pos-(rstart-buf), pos, parsed, buf_recs, buf_tooshort);
-    } // end : read file chunk buf by buf
-
-    free(buf);
-    args->hits = hits;
-    fclose(fd);
-}
-
-
-void distribute_fileparts(struct scanargs *args)
-{
-    int i = 0;
-    while(args[i].fname != NULL) {
-
-        pthread_mutex_lock(&args_mutex);
-        if (args[i].assigned == 0) {
-            args[i].assigned++;
-            pthread_mutex_unlock(&args_mutex);
-
-            DBG("scanning filepart #%i (%li) : %ld..%ld-1",
-                    i, thread_self(), args[i].start, args[i].start + args[i].length);
-            scan_filepart(args+i);
-
-            // PyErr_Occurred() segfaults because of pthreads ?
-            if (exception)
-                return;
-
-        } else {
-            pthread_mutex_unlock(&args_mutex);
-        }
-        i++;
+	//DBG("parsed %li -> %li (parsed=%li) recs=%i tooshort=%i",
+	//        pos-(rstart-buf), pos, parsed, buf_recs, buf_tooshort);
+	profile_stop("scan buf");
     }
+    // end : read file buf by buf }}}3
+
+    // exception, errstr set if bl == -1
+    free(buf);
 }
 
 
-static PyObject *
-engine_findseqs(PyObject *self, PyObject *args)
+/* module functions {{{1 */
+
+/* engine.stats {{{2 */
+
+    static PyObject *
+engine_stats(PyObject *self, PyObject *args)
 {
-    FILE *fd;
-    const char *fname;
-    long fsz, length, fpos;
-    PyObject *seqlist_obj, *str, *ret, *hits, *stats;
-    int i, j, n, threadi, args_n, args_i, err;
-    char **seqlist, recbuf[10240];
-    int *seqlengths;
-    ll_item *root, *item;
+    int i;
+    PyObject *rls, *sbhs, *shs;
+    float progress;
+
+    if (!PyArg_ParseTuple(args, ""))
+	return NULL;
+
+    rls = PyTuple_New(rls_longest+1);
+    for(i=0; i<=rls_longest; i++) {
+	PyTuple_SetItem(rls, i, PyInt_FromLong(rls_buf[i]));
+	//DBG("rl=%d %ldx", i, rls_buf[i]);
+    }
+
+    sbhs = PyTuple_New(nseqs);
+    for(i=0; i<nseqs; i++)
+	PyTuple_SetItem(sbhs, i, PyInt_FromLong(seqbasehits[i]));
+
+    shs = PyTuple_New(nseqs);
+    for(i=0; i<nseqs; i++)
+	PyTuple_SetItem(shs, i, PyInt_FromLong(seqhits[i]));
+
+    // DBG("engine_stats : parsed=%li total=%li", parsed, total);
+
+    progress = 0;
+    if (fastq_size_estimated > 0)
+	progress = ((float) MIN(fastq_parsed, fastq_size_estimated)) / fastq_size_estimated;
+
+    return Py_BuildValue("{sOsfsOsOsOsOsOsO}",
+	    "readlengths", rls,
+	    "progress", progress,
+	    "nseqbasehits", sbhs,
+	    "nseqhits", shs,
+	    "parsed", PyInt_FromLong(fastq_parsed),
+	    "total", PyInt_FromLong(fastq_size_estimated),
+	    "sigints", PyInt_FromLong(sigints),
+	    "records_parsed", PyInt_FromLong(records_parsed)
+	    );
+}
+
+/* engine.findseqs {{{2 */
+
+    static PyObject *
+engine_findseqs(PyObject *self, PyObject *findseqs_args)
+{
+    const char **fnames;
+    PyObject *fname_obj, *seqlist_obj, *str, *ret, *hits, *pystats;
+    int i, threadi, err;
+    ll_item *item;
     pthread_t *threads;
-    struct scanargs *thread_args;
+    struct scanargs args;
 
     if (running != 0) //FIXME threadsafe
     {
-        PyErr_SetString(PyExc_RuntimeError, "findseqs() already running!");
-        return NULL;
+	PyErr_SetString(PyExc_RuntimeError, "findseqs() already running!");
+	return NULL;
     }
     running++;
     stop = 0;
     sigints = 0;
 
-    // argument parsing
+    // argument parsing {{{3
 
-    if (!PyArg_ParseTuple(args, "sO", &fname, &seqlist_obj)) {
-        running--;
-        return NULL;
+    if (!PyArg_ParseTuple(findseqs_args, "OO", &fname_obj, &seqlist_obj)) {
+	running--;
+	return NULL;
+    }
+
+    if (PyString_Check(fname_obj)) {
+	fnames = (const char **) malloc(sizeof(char *) * 2);
+	if (fnames == NULL) {
+	    running--;
+	    return PyErr_NoMemory();
+	}
+	fnames[0] = PyString_AsString(fname_obj);
+	fnames[1] = NULL;
+
+    } else if (PySequence_Check(fname_obj)) {
+	fnames = (const char **) malloc(sizeof(char *) *
+		(PySequence_Size(fname_obj) + 1));
+	if (fnames == NULL) {
+	    running--;
+	    return PyErr_NoMemory();
+	}
+	for(i = 0; i < PySequence_Size(fname_obj); i++)
+	    fnames[i] = PyString_AsString(PySequence_GetItem(fname_obj, i));
+	fnames[i] = NULL;
+
+    } else {
+	PyErr_SetString(PyExc_TypeError, "fname must be [sequence of] string[s]");
+	running--;
+	return NULL;
     }
 
     if (!PySequence_Check(seqlist_obj))
     {
-        PyErr_SetString(PyExc_TypeError, "seqlist must be list of strings");
-        running--;
-        return NULL;
+	PyErr_SetString(PyExc_TypeError, "seqlist must be sequence of strings");
+	free(fnames);
+	running--;
+	return NULL;
     }
 
-    seqlist = (char **) malloc((PySequence_Size(seqlist_obj)+1) * sizeof(char *));
-    if (seqlist == NULL) {
-        running--;
-        return PyErr_NoMemory();
+    args.seqlist = (char **) malloc((PySequence_Size(seqlist_obj)+1) * sizeof(char *));
+    if (args.seqlist == NULL) {
+	free(fnames);
+	running--;
+	return PyErr_NoMemory();
     }
-    seqlengths = (int *) malloc(PySequence_Size(seqlist_obj) * sizeof(int *));
-    if (seqlengths == NULL)
+    args.seqlengths = (int *) malloc(PySequence_Size(seqlist_obj) * sizeof(int *));
+    if (args.seqlengths == NULL)
     {
-        free(seqlist);
-        running--;
-        return PyErr_NoMemory();
+	free(args.seqlist);
+	free(fnames);
+	running--;
+	return PyErr_NoMemory();
     }
 
     for(i=0; i<PySequence_Size(seqlist_obj); i++) 
     {
-        str = PySequence_GetItem(seqlist_obj, i);
-        seqlist[i] = PyString_AsString(str);
-        if (seqlist[i] == NULL)
-        {
-            free(seqlengths);
-            free(seqlist);
-            PyErr_SetString(PyExc_TypeError, "seqlist must be list of strings");
-            running--;
-            return NULL;
-        }
-        seqlengths[i] = (int) PyString_Size(str);
+	str = PySequence_GetItem(seqlist_obj, i);
+	args.seqlist[i] = PyString_AsString(str);
+	if (args.seqlist[i] == NULL)
+	{
+	    free(args.seqlengths);
+	    free(args.seqlist);
+	    PyErr_SetString(PyExc_TypeError, "seqlist must be list of strings");
+	    free(fnames);
+	    running--;
+	    return NULL;
+	}
+	args.seqlengths[i] = (int) PyString_Size(str);
     }
-    seqlist[i] = NULL;
+    args.seqlist[i] = NULL;
 
-    // prepare sequence quest
 
-    fd = fopen(fname,"rb");
-    if (fd == NULL)
+    // prepare sequence quest {{{3
+
+    args.fastq = fastq_open(fnames);
+    if (args.fastq == NULL)
     {
-        free(seqlengths);
-        free(seqlist);
-        PyErr_SetString(PyExc_IOError, "cannot open file");
-        running--;
-        return NULL;
+	PyErr_SetString(exception, errstr);
+	free(args.seqlengths);
+	free(args.seqlist);
+	free(fnames);
+	running--;
+	return NULL;
     }
-    fseek(fd, 0L, SEEK_END);
-    fsz = ftell(fd);
 
-    root = (ll_item *) malloc(sizeof(ll_item));
-    if (root == NULL)
+    args.root = (ll_item *) malloc(sizeof(ll_item));
+    if (args.root == NULL)
     {
-        fclose(fd);
-        free(seqlist);
-        free(seqlengths);
-        running--;
-        return PyErr_NoMemory();
+	fastq_close(args.fastq);
+	free(args.seqlist);
+	free(args.seqlengths);
+	free(fnames);
+	running--;
+	return PyErr_NoMemory();
     }
-    root->fpos = -1L;
-    root->next = NULL;
+    args.root->fpos = -1L;
+    args.root->next = NULL;
 
-    init_stats(seqlist);
+    args.pyhitseqs = PyList_New(0);
 
-    // start sequence quest
+    init_stats(args.seqlist);
+
+    profiles_n = 0;
+
+    // start threads {{{3
 
     threads = (pthread_t *) malloc(sizeof(pthread_t) *nthreads);
-    args_n = MAX(nthreads, MIN(10 * nthreads, fsz / (1024 * 1024 * 10))); // junks >= 10 MB up to n=2*n(threads)
-    thread_args = (struct scanargs *) malloc(sizeof(struct scanargs) *(args_n+1));
-    total = fsz / SCANBUFSIZE;
-    parsed = 0;
-
-    DBG("nthreads=%d args_n=%d", nthreads, args_n);
-
-    for(args_i=0, fpos=0, length=0; args_i<args_n; args_i++)
-    {
-        if (args_i == args_n-1)
-        {
-            // last thread gets remainder of file
-            length = fsz-fpos > 0 ? fsz-fpos : 0;
-        }
-        else
-        {
-            length = fsz/args_n;
-            fseek(fd, fpos+length, SEEK_SET);
-
-            //DBG("next record was at : %li", fpos+length);
-
-            // make sure next thread starts at beginning of new record...
-            n = fread((void *) recbuf, 1, sizeof(recbuf), fd);
-            i = forward_fastq(recbuf, n);
-            // ignore error i==-1 : part will fail when scanning
-
-            length += i;
-
-            //DBG("advanced by : %i", i);
-        }
-
-        thread_args[args_i].assigned = 0;
-        thread_args[args_i].fname = fname;
-        thread_args[args_i].start = fpos;
-        thread_args[args_i].length = length;
-        thread_args[args_i].seqlist = seqlist;
-        thread_args[args_i].seqlengths = seqlengths;
-        thread_args[args_i].root = root;
-
-        // DBG("thread_args[%d] %ld+%ld", args_i, fpos, length);
-
-        // advance file pointer
-        if (length >0)
-            fpos += length;
-    }
-    thread_args[args_i].fname = NULL;
 
     Py_BEGIN_ALLOW_THREADS
 
     for(threadi=0; threadi<nthreads; threadi++)
     {
 
-        err = pthread_create(threads+threadi, NULL, 
-                (void *(*)(void *)) distribute_fileparts, 
-                thread_args);
-        DBG("created thread #%d (%li)", threadi, pthread2long(threads[threadi]));
+	err = pthread_create(threads+threadi, NULL, 
+		(void *(*)(void *)) scan_filepart,
+		(void *) &args);
 
-        if (err != 0)
-        {
-            stop++;
-            for(i=0; i<threadi; i++)
-                pthread_join(threads[i], NULL);
-            exception = PyExc_RuntimeError;
-            strncpy(errstr, "pthread_create failed", ERRSTR_LENGTH);
-            threadi = -1;
-            break;
-        }
+	if (err != 0)
+	{
+	    stop++;
+	    for(i=0; i<threadi; i++)
+		pthread_join(threads[i], NULL);
+	    exception = PyExc_RuntimeError;
+	    strncpy(errstr, "pthread_create failed", ERRSTR_LENGTH);
+	    threadi = -1;
+	    break;
+	}
 
-        // advance file pointer
-        if (length >0)
-            fpos += length;
+	// DBG("created thread #%d (%li)", threadi, pthread2long(threads[threadi]));
     }
 
-    ret = NULL;
+    ret = NULL; // will indicate error if not set
+
+    // end threads, get results {{{3
 
     if (threadi != -1)
-        for(threadi=0; threadi<nthreads; threadi++)
-            pthread_join(threads[threadi], NULL);
+	for(threadi=0; threadi<nthreads; threadi++)
+	    pthread_join(threads[threadi], NULL);
 
     Py_END_ALLOW_THREADS
 
     if (threadi != -1)
     {
 
-        if (exception == NULL)
-        {
-            // convert return value
+	if (exception == NULL)
+	{
+	    // convert return value
 
-            for(i=0,item=root->next; item!=NULL; i++)
-                item = item->next;
+	    for(i=0,item=args.root->next; item!=NULL; i++)
+		item = item->next;
 
-            hits = PyTuple_New(i);
-            for(i=0,item=root->next; item!=NULL; i++,item=item->next)
-                PyTuple_SetItem(hits, i,
-                        PyObject_CallObject(hittuple, 
-                            Py_BuildValue("(iliii)", 
-                                item->seqi,
-                                item->fpos,
-                                item->spos,
-                                item->length,
-                                item->readlength)
-                            )
-                        );
+	    hits = PyTuple_New(i);
+	    for(i=0,item=args.root->next; item!=NULL; i++,item=item->next)
+		PyTuple_SetItem(hits, i,
+			PyObject_CallObject(hittuple, 
+			    Py_BuildValue("(iliii)", 
+				item->seqi,
+				item->fpos,
+				item->spos,
+				item->length,
+				item->readlength)
+			    )
+			);
 
-            ret = Py_BuildValue("{sOsO}",
-                    "hits", hits,
-                    "stats", engine_stats(self, Py_BuildValue("()")));
-        }
+	    pystats = engine_stats(self, Py_BuildValue("()"));
+	    ret = Py_BuildValue("{sOsOsO}",
+		    "hits", hits,
+		    "stats", pystats,
+		    "hitseqs", args.pyhitseqs);
+	    Py_XDECREF(hits);
+	    Py_XDECREF(pystats);
+	    Py_XDECREF(args.pyhitseqs);
+	}
     }
 
-    // clean up
+    // clean up {{{3
 
     free(threads);
-    free(thread_args);
-    free_ll(root);
-    fclose(fd);
-    free(seqlist);
-    free(seqlengths);
+    free_ll(args.root);
+    fastq_close(args.fastq);
+    free(args.seqlist);
+    free(args.seqlengths);
 
     if (exception != NULL) {
-        PyErr_SetString(exception, errstr);
-        exception = NULL;
+	PyErr_SetString(exception, errstr);
+	exception = NULL;
     }
+
+    profile_dump();
 
     running--;
     return ret;
 }
 
+/* engine.stop {{{2 */
 
+    static PyObject *
+engine_stop(PyObject *self, PyObject *args)
+{
+    if (!PyArg_ParseTuple(args, ""))
+	return NULL;
 
-static PyObject *
+    stop++;
+
+    Py_RETURN_NONE;
+}
+
+/* engine.get_config {{{2 */
+
+    static PyObject *
 engine_get_config(PyObject *self, PyObject *args)
 {
     return Py_BuildValue("{sisisisiscsc}", 
-            "maxerrors", maxerrors,
-            "minoverlap", minoverlap,
-            "minreadlength", minreadlength,
-            "nthreads", nthreads,
-            "Amin", Amin,
-            "Azero", Azero);
+	    "maxerrors", maxerrors,
+	    "minoverlap", minoverlap,
+	    "minreadlength", minreadlength,
+	    "nthreads", nthreads,
+	    "Amin", Amin,
+	    "Azero", Azero);
 }
 
+/* engine.config {{{2 */
 
-static PyObject *
+    static PyObject *
 engine_config(PyObject *self, PyObject *args, PyObject *kw)
 {
     static char *kwl[] = { "maxerrors", "minoverlap", "minreadlength", "nthreads", "Amin", "Azero", NULL };
 
     if (!PyArg_ParseTupleAndKeywords(args, kw, 
-                "|iiiicc", kwl, &maxerrors, &minoverlap, &minreadlength, &nthreads, &Amin, &Azero))
-        return NULL;
+		"|iiiicc", kwl, &maxerrors, &minoverlap, &minreadlength, &nthreads, &Amin, &Azero))
+	return NULL;
 
     Py_RETURN_NONE;
 }
 
+/* engine.test {{{2 */
 
-static PyObject *
-engine_abort(PyObject *self, PyObject *args)
-{
-    stop++;
-    Py_RETURN_NONE;
-}
-
-
-void *do_nothing(void *ptr) {
-    int i=0, x, y;
-    for(x=0; x<100000; x++)
-    for(y=0; y<30000; y++) {
-        i-= i%15; // cannot be optimized away easily...
-        i+= (i/2 +5) *3;
-    }
-    return (void *) 0;
-}
-
-static PyObject *
-engine_loop(PyObject *self, PyObject *args)
-{
-    int n = 8, i;
-    pthread_t *pts;
-    int *prs;
-
-    pts = (pthread_t *) malloc(sizeof(pthread_t) *n);
-    prs = (int       *) malloc(sizeof(int      ) *n);
-    for(i=0; i<n; i++)
-        prs[i] = pthread_create(pts+i, NULL, do_nothing, NULL);
-
-    for(i=0; i<n; i++)
-        pthread_join(pts[i], NULL);
-
-    Py_INCREF(Py_None);
-    return Py_None;
-}
-
-
-static PyObject *
+    static PyObject *
 engine_test(PyObject *self, PyObject *args)
 {
-    PyObject *number, *tuple;
-    
-    number = PyInt_FromLong(1L);
-    tuple = PyTuple_New(1);
-    printf("number->refcount=%d\n", -1);
+    profile_dump();
+
     Py_RETURN_NONE;
 }
 
+
+/* initialization {{{1 */
+
+/* PyMethodDef {{{2 */
 
 static PyMethodDef methods[] = {
     {"test",  engine_test, METH_VARARGS,
-     "Perform some test."},
+	"test() -- perform some test.\n"},
     {"config",  (PyCFunction)engine_config, METH_VARARGS | METH_KEYWORDS,
-     "configure the engine; keywords are:\n\n"
-     "maxerrors : maximum number of base mismatches in sequence alignment\n"
-     "minoverlap : minimum number of base overlap for beginning/end hits\n"
-     "minreadlength : ignore reads shorter than this\n"
-     "nthreads : number of threads to use for scanning\n"
-     "Amin : nucleotides with quality ASCII value lower than this are discarded\n"
-     "Azero : ASCII value that corresponds to Q=0 (depends on FastQ format)\n"},
+	"config(**kwargs) -- configure the engine.\n"
+	"arguments:\n"
+	"'maxerrors : maximum number of base mismatches in sequence alignment\n"
+	"'minoverlap : minimum number of base overlap for beginning/end hits\n"
+	"'minreadlength : ignore reads shorter than this\n"
+	"'nthreads : number of threads to use for scanning\n"
+	"'Amin : nucleotides with quality ASCII value lower than this are discarded\n"
+	"'Azero : ASCII value that corresponds to Q=0 (depends on FastQ format)\n"},
     {"get_config", engine_get_config, METH_VARARGS,
-     "get the current config as dictionary"},
-    {"abort",  engine_abort, METH_VARARGS,
-     "Stop the current scanning."},
-    {"loop",  engine_loop, METH_VARARGS,
-     "Do nothing, but real hard."},
+	"get_config() -- get the current config as dictionary.\n"},
     {"findseqs", engine_findseqs, METH_VARARGS,
-     "finds occurences of base sequences in fastq files\n\n"
-     "fname : filename of fastq file\n"
-     "sequences : list of sequences to look for\n\n"
-     "returns a dictionary 'hits' and 'stats':\n\n"
-     "'hits' is a named tuple of (seq_nr, file_pos, seq_pos, length, readlength)\n"
-     "file_pos describes beginning of read, seq position places the\n"
-     "beginning of the read relative to the beginning of the sequence\n"
-     "(<0 if read overlaps only with beginning of sequence or read contains\n"
-     "whole sequence; >0 if read overlaps only with end of sequence or read\n"
-     "is contained within sequence), length gives the number of overlapping basepairs\n\n"
-     "'stats' is the same dict as returned by a call to stats()\n"},
+	"findseqs(fname, sequences) -- finds occurences of base sequences in fastq files.\n"
+	"arguments:\n"
+	"'fname' : filename of fastq file or sequence of filenames of fastq files\n"
+	"'sequences' : list of sequences to look for\n\n"
+	"returns a dictionary with:\n"
+	"'hits' : tuple of kvarq.engine.Hit\n"
+	"'stats' : is the same dict as returned by a call to stats()\n"
+	"'hitseqs' : tuple of base sequences corresponding to 'hits'\n"},
     {"stop",  engine_stop, METH_VARARGS,
-     "stop the scanning process"},
+	"stop() -- stops the scanning process.\n"},
     {"stats", engine_stats, METH_VARARGS,
-     "returns a dict containing information about scanning process\n"
-     "  - 'readlengths' : tuple of number of occurences when accessed by read length\n"
-     "  - 'progress' : current progress of findseqs() ranging 0..1\n"
-     "  - 'sigints' : how many <CTRL-C> were caught since beginning of scan\n"
-     "  - 'nseqbasehits' : sum(hit_length), indexed by sequence as given to findseqs()\n"
-     "  - 'nseqhits' : number of hits, indexed by sequence as given to findseqs()\n"
-     "  - 'records_parsed' : total number of records parsed\n"},
+	"stats() -- get statistics during scanning process.\n"
+	"returns a dict containing:\n"
+	"'readlengths' : tuple of number of occurences when accessed by read length\n"
+	"'progress' : current progress of findseqs() ranging 0..1\n"
+	"'sigints' : how many <CTRL-C> were caught since beginning of scan\n"
+	"'nseqbasehits' : sum(hit_length), indexed by sequence as given to findseqs()\n"
+	"'nseqhits' : number of hits, indexed by sequence as given to findseqs()\n"
+	"'records_parsed' : total number of records parsed\n"},
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
 
 
+/* init module {{{2 */
+
 // if called initX : "module does not defined init function (initc)"
 // if called initd and setup.py calls extensions 'd' : "dynamic module not initialized properly"
-PyMODINIT_FUNC
+    PyMODINIT_FUNC
 initengine(void)
 {
-    PyObject *collections, *namedtuple, *fastq;
+    PyObject *mod, *obj;
 
     (void) Py_InitModule("engine", methods);
 
-    collections = PyImport_ImportModule("collections");
-    namedtuple = PyObject_GetAttrString(collections, "namedtuple");
+    // create object kvarq.engine.Hit
 
-    hittuple = PyObject_CallObject(namedtuple,
-            Py_BuildValue("(sO)", "Hit", 
-                    Py_BuildValue("(sssss)",
-                            "seq_nr",
-                            "file_pos",
-                            "seq_pos",
-                            "length",
-                            "readlength")));
+    mod = PyImport_ImportModule("collections");
+    obj = PyObject_GetAttrString(mod, "namedtuple");
+    Py_DECREF(mod);
+
+    hittuple = PyObject_CallObject(obj,
+	    Py_BuildValue("(sO)", "Hit", 
+		Py_BuildValue("(sssss)",
+		    "seq_nr",
+		    "file_pos",
+		    "seq_pos",
+		    "length",
+		    "readlength")));
+    PyObject_SetAttrString(hittuple,"__doc__",PyString_FromString(
+		"seq_nr : refers to the list of sequences in call to engine.findseqs\n"
+		"file_pos : beginning of read (within decompressed data)\n"
+		"seq_pos : places the beginning of the read relative to the beginning of the sequence (<0 if read overlaps only with beginning of sequence or read contains whole sequence; >0 if read overlaps only with end of sequence or read is contained within sequence)\n"
+		"length : gives the number of overlapping basepairs\n"
+		"readlength : length of the (quality trimmed) read containing the hit\n"
+		));
+    Py_DECREF(obj);
     engine_mod = PyImport_ImportModule("kvarq.engine");
     PyObject_SetAttrString(engine_mod, "Hit", hittuple);
 
-    fastq = PyImport_ImportModule("kvarq.fastq");
-    fastq_exception = PyObject_GetAttrString(fastq, "FastqFileFormatException");
+    mod = PyImport_ImportModule("kvarq.fastq");
+    fastq_exception = PyObject_GetAttrString(mod, "FastqFileFormatException");
+    Py_DECREF(mod);
     exception = NULL;
+
+    // initialize logging
+
+    mod = PyImport_ImportModule("kvarq.log");
+    obj = PyObject_GetAttrString(mod, "lo");
+    lo_log = PyObject_GetAttrString(obj, "log");
+    Py_DECREF(obj);
+    Py_DECREF(mod);
+
+    mod = PyImport_ImportModule("logging");
+    obj = PyObject_GetAttrString(mod, "DEBUG");
+    LOG_DEBUG = PyInt_AS_LONG(obj);
+    Py_DECREF(obj);
+    obj = PyObject_GetAttrString(mod, "INFO");
+    LOG_INFO = PyInt_AS_LONG(obj);
+    Py_DECREF(obj);
+    obj = PyObject_GetAttrString(mod, "WARNING");
+    LOG_WARNING = PyInt_AS_LONG(obj);
+    Py_DECREF(obj);
+    obj = PyObject_GetAttrString(mod, "ERROR");
+    LOG_ERROR = PyInt_AS_LONG(obj);
+    Py_DECREF(obj);
+    obj = PyObject_GetAttrString(mod, "FATAL");
+    LOG_FATAL = PyInt_AS_LONG(obj);
+    Py_DECREF(obj);
+    Py_DECREF(mod);
 
 #ifdef _WIN32 // 32/64 bit windows
     SetConsoleCtrlHandler((PHANDLER_ROUTINE) CtrlHandler, TRUE);
@@ -993,4 +1439,6 @@ initengine(void)
     signal(SIGINT, sigint_cb);
 #endif
 }
+
+// vim:ts=8:noet:sw=4:
 

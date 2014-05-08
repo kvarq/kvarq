@@ -1,15 +1,16 @@
 {% extends "!layout.html" %}
 
 {%- block extrahead %} 
-    <link rel="stylesheet" type="text/css" href="_static/css/screen.css" />
-    <link rel="stylesheet" type="text/css" href="_static/css/jquery-fancybox-1.3.4.css" />
-    <script type="text/javascript" src="_static/js/jquery-fancybox-1.3.4.js"></script>
-    <script type="text/javascript">
+    <link rel="stylesheet" type="text/css" href="_static/fancybox/screen.css" />
+    <link rel="stylesheet" type="text/css" href="_static/fancybox/jquery-fancybox-1.3.4.css" />
+{% endblock %}
 
+{%- block footer %} 
+    <script type="text/javascript" src="_static/fancybox/jquery-fancybox-1.3.4.js"></script>
+    <script type="text/javascript">
         //  add these parameters to a ".. figure::" directive to activate fancybox
         //    :scale: 100
         //    :figclass: fig400px
-
         $(document).ready(function() {
             $('a.image-reference').fancybox({
                 'transitionIn' : 'elastic',

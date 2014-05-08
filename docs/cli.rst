@@ -1,4 +1,6 @@
 
+.. highlight:: bash
+
 .. _cli:
 
 Using KvarQ Command Line Interface (CLI)
@@ -10,7 +12,7 @@ Using The Command Line
 ----------------------
 
 Depending on which :ref:`installation instructions <installing>` you
-followed, the kvarq command line utility will be accessible in a
+followed, the KvarQ command line utility will be accessible in a
 different way
 
   - installation from source: simply enter ``kvarq`` on the command
@@ -28,13 +30,34 @@ different way
 
 In either case you can use all the functionality described below
 by using this one comand with appopriate flags.  The different flags
-are all described briefly if kvarq is run with the ``--help`` command
+are all described briefly if KvarQ is run with the ``--help`` command
 line switch.
 
-Note that most command line arguments apply to a specific subcommand, but some
-arguments (such as selection of :ref:`testsuites <testsuites>` using the ``-t``
-option or logging using the ``-d`` and ``-l`` options) apply to all commands
-and are therefore specified **before** the subcommand.
+Note that most command line arguments apply to a specific **subcommand**, but
+some arguments (such as selection of :ref:`testsuites <testsuites>` using the
+``-t`` option or logging using the ``-d`` and ``-l`` options) apply to all
+commands and are therefore specified *before* the subcommand.
+
+
+.. _loading-testsuites:
+
+Loading of Testsuites
+---------------------
+
+:ref:`Testsuites <testsuites>` can be loaded by three different mechanisms.
+These mechanisms can be used for the :ref:`GUI program <gui>` as well if it is
+started from the command line using the ``gui`` subcommand. Note that if
+a testsuite is specified more than one time, the last occurrence is used.
+
+
+  1. From the environment variable ``KVARQ_TESTSUITES`` that contains a colon
+     separated list of paths to :ref:`Testsuites`.
+
+  2. From the directory ``testsuites/`` in the current working directory.
+     This directory can also contain symbolic links to :ref:`Testsuites`.
+
+  3. Via the command line switch ``-t``. This switch can be specified any
+     number of times.
 
 
 Directly Analysing a .fastq
@@ -87,34 +110,36 @@ with a particular ``.fast`` file, refer to the examples in
 Scanning a Batch of Files
 -------------------------
 
-The kvarq source distribution comes with some utility scripts that allow to
+The KvarQ source distribution comes with some utility scripts that allow to
 scan a whole batch of ``.fastq`` files with a single invocation from the
 command line. the names of the ``.fastq`` files are taken from a table (which
 can be in comma separated values format or alternatively in Microsoft Excel
 97/2000/XP/2003 for convenience).  The execution of the script
 ``scripts/table_scan.py`` will try to find every ``.fastq`` file specified in
 the table, then run ``kvarq/cli.py`` and save the resulting ``.json`` files
-into the specified output directory::
+into the specified output directory (by default, testsuites are drawn from the
+directory ``./testsuites`` so you might want to set a symlink before starting
+the scan as in the following example)::
 
-    python scripts/table_scan.py -f '-t testsuites/MTBC/' selection.xls results/
+    ln -s /usr/local/share/kvarq/testsuites/MTBC/ testsuites
+    python scripts/table_scan.py fastqs.xls results
 
-In the following example, the files in the list are only scanned for
+In the next example, the files in the list are only scanned for
 phylogenetic markers and resistance information and the number of threads is
 limited to four to save some processing power for the other users while all hit
 occurences are recorded for further analysis (the flags specified are exeactly
-the same as available for the :ref:`scan subcommand <cli-scan-singlefile>` --
-``{logfn}`` will be replaced with a file called ``table_scan.log`` in the
-destination directory)::
+the same as available for the :ref:`scan subcommand <cli-scan-single-file>`)::
 
-    python scripts/table_scan.py -f '-l {logfn} -t testsuites/MTBC/ scan -t 4 -H -p' selection.xls results/
+    ln -s /usr/local/share/kvarq/testsuites/MTBC/phy testsuites
+    python scripts/table_scan.py -f '-l kvarq.log -t testsuites/phylo.py -t testsuites/resistance.py scan -t 4 -H -p' fastqs.csv results/
 
 In a second step, the original table can be combined with the results of all
 the ``.json`` files (the following command will create a new file called
-``output/selection.xls`` that contains the original ``selection.xls`` as well
+``output/fastqs.xls`` that contains the original ``fastqs.xls`` as well
 as the result from the scans).  The script can easily be modified to include
 other data from the ``.json`` file than the default selection.::
 
-    python scripts/table_combine.py selection.xls results/
+    python scripts/table_combine.py fastqs.xls results/
 
 
 .. _cli-illustrate:

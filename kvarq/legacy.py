@@ -77,6 +77,12 @@ def convert_legacy_data(testsuites, data):
         del data['tests']
         version[1] += 1
 
+    # convert info.fastq/info.size to lists
+    if version[0] == 0 and version[1] == 11:
+        data['info']['fastq'] = [data['info']['fastq']]
+        data['info']['size'] = [data['info']['size']]
+        version[1] += 1
+
     assert version[0] == kvarq_version[0] and version[1] == kvarq_version[1], \
             VersionConflictException('could not elevate version more than to "%d.%d"' %
                     (version[0], version[1]))

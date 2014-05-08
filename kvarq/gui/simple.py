@@ -30,6 +30,7 @@ class AnalyseThread(threading.Thread):
         self.testsuites = testsuites
         self.finished = False
         self.exception = None
+        self.stopped = False
 
     def run(self):
         try:
@@ -37,6 +38,10 @@ class AnalyseThread(threading.Thread):
             self.finished = True
         except Exception, e:
             self.exception = e
+
+    def stop(self):
+        engine.stop()
+        self.stopped = True
 
 
 class SimpleGUI(ThemedTk):
@@ -103,7 +108,9 @@ class SimpleGUI(ThemedTk):
 
             fastqs = askopenfilename(
                     multiple=True,
-                    filetypes=[('fastq files', '*.fastq')],
+                    filetypes=[
+                        ('fastq files', '*.fastq'),
+                        ('compressed fastq files', '*.fastq.gz')],
                     title='select .fastq files to analyze')
 
             if not fastqs:
@@ -172,7 +179,8 @@ class SimpleGUI(ThemedTk):
             self.pb.start()
             self.after(100, self.update)
             lo.info('start scanning %s (%d MB)'%(
-                    self.fastq.fname, self.fastq.size/1024**2))
+                    self.fastq.fname,
+                    os.path.getsize(self.fastq.fname)/1024**2))
             self.running = True
 
             self.start.config(text='stop')
@@ -199,7 +207,7 @@ class SimpleGUI(ThemedTk):
     def update(self):
 
         if not self.running:
-            engine.abort()
+            self.at.stop()
             self.at.join()
             lo.info('STOPPED scanning via GUI after %.3f seconds'% (time.time()-self.t0))
             self.finish_scanning()
@@ -213,14 +221,14 @@ class SimpleGUI(ThemedTk):
         self.pb_longest = max(self.pb_longest, len(pb_str)) # prevent too much window resizing
         self.pblabel.config(text=('{:<%d}' % self.pb_longest).format(pb_str))
 
-        if self.settings.config['stop median coverage']:
-            means = sorted([n/len(self.analyser[i])
-                    for i, n in enumerate(stats['nseqbasehits'])])
-
-            if means and means[len(means)/2] > self.settings.config['stop median coverage']:
-                lo.info('aborting scanning: median of coverage %d > %d'%(
-                        means[len(means)/2], self.settings.config['stop median coverage']))
-                engine.stop()
+#        if self.settings.config['stop median coverage'] and not self.at.stopped:
+#            means = sorted([n/len(self.analyser[i])
+#                    for i, n in enumerate(stats['nseqbasehits'])])
+#
+#            if means and means[len(means)/2] > self.settings.config['stop median coverage']:
+#                lo.info('aborting scanning: median of coverage %d > %d'%(
+#                        means[len(means)/2], self.settings.config['stop median coverage']))
+#                self.at.stop()
 
         if self.at.finished or self.at.exception:
             self.at.join()
@@ -283,7 +291,7 @@ class SimpleGUI(ThemedTk):
 
     def destroy_cb(self, x=None):
         if self.running:
-            engine.abort()
+            self.at.stop()
             self.at.join()
             lo.removeHandler(self.log_handler)
 

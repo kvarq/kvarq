@@ -4,10 +4,24 @@
 Changelog
 =========
 
+version 0.12.1
+~~~~~~~~~~~~~~
+
+  - support ``.fastq.gz`` files
+  - added new ways to :ref:`load testsuites <loading-testsuites>`
+  - added new :ref:`testsuites <testsuites>` to different repositories at
+    http://github.com/kvarq (linked as submodules)
+  - some bugfixes in ``scripts/table_{scan|combine}.py``
+
 version 0.11.3
 ~~~~~~~~~~~~~~
 
+  - (first public version, pushed to github)
+  - compile on windows without having to install pthread files
   - moved all testsuites into separate ``testsuite/`` directory
+  - introduced :ref:`testsuite compatability checks <testsuites-compatibility>`
+  - updated ``MTBC.resistance`` testsuite (added ``katG.279``,
+    ``rpoC.N698H``, renamed ``rrsK``)
 
 version 0.11.2
 ~~~~~~~~~~~~~~
@@ -26,7 +40,7 @@ version 0.11.1
     separately (some are included in ``testsuites/legacy/``)
 
 version 0.10.10
-~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~
 
   - enabled multiple use of same :py:class:`kvarq.genes.Test` for different
     :py:class:`kvarq.genes.Testsuite`
