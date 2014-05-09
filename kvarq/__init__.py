@@ -9,4 +9,4 @@
 VERSION = '0.12.1'
 
 DOWNLOAD_URL = 'https://siwsstph.ch/kvarq'
-DOC_URL = 'http://kvarq.github.io/kvarq'
+DOC_URL = 'http://kvarq.readthedocs.org/'
