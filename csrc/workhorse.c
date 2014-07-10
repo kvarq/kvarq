@@ -17,7 +17,7 @@
 #define MAX(A,B) (A>B?A:B)
 
 
-#if 1
+#if 0
 #define DBG(fmt, ...) fprintf(stderr, fmt "\n", __VA_ARGS__)
 #else
 #define DBG(...)
@@ -107,10 +107,10 @@ long **all_rls_buf;
 #ifdef _WIN32 // 32/64 bit windows
 BOOL CtrlHandler(DWORD fdwCtrlType)
 {
-    DBG("CtrlHandler called");
+    // DBG("CtrlHandler called");
     if (fdwCtrlType == CTRL_C_EVENT)
     {
-	DBG("CtrlHandler detected CTRL_C_EVENT");
+	// DBG("CtrlHandler detected CTRL_C_EVENT");
 	sigints++;
 	return TRUE;
     } 
@@ -411,6 +411,93 @@ void free_ll(ll_item *root)
     }
 }
 
+/* parse .gz {{{2 */
+
+#define GZ_DEFLATED     8
+#define GZ_ASCII_FLAG   0x01 /* bit 0 set: file probably ascii text */
+#define GZ_CONTINUATION 0x02 /* bit 1 set: continuation of multi-part gzip file */
+#define GZ_EXTRA_FIELD  0x04 /* bit 2 set: extra field present */
+#define GZ_ORIG_NAME    0x08 /* bit 3 set: original file name present */
+#define GZ_COMMENT      0x10 /* bit 4 set: file comment present */
+#define GZ_ENCRYPTED    0x20 /* bit 5 set: file is encrypted */
+#define GZ_RESERVED     0xC0 /* bit 6,7:   reserved */
+
+/**
+ * advances file position past gz header
+ *
+ * checks for a valid gz header (starting with magix bytes 0x1F 0x8B)
+ * in file stream and advances file pointer past the header; no data
+ * is returned but the correctness of the gz format (without encryption,
+ * continuation, or reserved features) is asserted
+ *
+ * @param fd FILE pointer
+ * @param dist how many random bytes can be accepted before the header
+ *
+ * @return NULL if successful, otherwise descriptive error string
+ */
+
+const char *skip_gz_header(FILE *fd, int dist)
+{
+    // (based on gzip 1.2.4 source code)
+    // 2 bytes : magic 1F 8B
+    // 1 byte  : method -- must be DEFLATED
+    // 1 byte  : flags -- does not support CONTINUATION, ENCRYPTED, RESERVED
+    // 4 bytes : timestamp
+    // 1 byte  : extra flags
+    // 1 byte  : os type
+    // optional : original name
+    // optional : comment
+
+    int state, c, flags, i, n, y;
+
+    for(state=0, c=fgetc(fd), y=0; state != 2 && y<=dist && c != -1; c=fgetc(fd)) {
+        if (c == 0x1F && state == 0)
+            state++;
+        else if (c == 0x8B && state ==1)
+            state++;
+        else {
+            state=0;
+            y++;
+        }
+    }
+
+    if (state != 2)
+        return "magic bytes not found";
+    //if (y) fprintf(stderr, "ignored %d<%d prior to header\n", y, dist);
+
+    if (c != GZ_DEFLATED) {
+        return "expected method==DEFLATED";
+    }
+    flags = fgetc(fd);
+    if (flags & (GZ_CONTINUATION | GZ_ENCRYPTED | GZ_RESERVED)) {
+        return "unsupported flags (CONTINUATION or ENCRYPTED or RESERVED)";
+    }
+    for(i=0; i<4 + 2; i++)
+        // ignore stamp, extra flags, os type
+        (void) fgetc(fd);
+    if (flags & GZ_EXTRA_FIELD) {
+        n = fgetc(fd);
+        n|= fgetc(fd) << 8;
+        // fprintf(stderr, "ingoring extra field length %d\n", n);
+        while(n--) (void) fgetc(fd);
+    }
+    if (flags & GZ_ORIG_NAME) {
+        // fprintf(stderr, "ignoring original name\n");
+        do {
+            c = fgetc(fd);
+        } while (c>0);
+    }
+    if (flags & GZ_COMMENT) {
+        // fprintf(stderr, "ignoring comment\n");
+        do {
+            c = fgetc(fd);
+        } while (c>0);
+    }
+
+    return NULL; // success
+}
+
+
 /* read from .fastq files {{{2 */
 
 /**
@@ -428,7 +515,7 @@ void free_ll(ll_item *root)
 
 int fastq_open_next(struct fastq_file *fastq)
 {
-    const char *fname;
+    const char *fname, *ret;
 
     if (fastq->fname_i > 0) {
 	// close open file & add bytes already read
@@ -462,7 +549,9 @@ int fastq_open_next(struct fastq_file *fastq)
 	    return -1;
 	}
 
-	fastq->inbuf = malloc(SCANBUFSIZE);
+	if (fastq->inbuf == NULL)
+	    fastq->inbuf = malloc(SCANBUFSIZE);
+
 	if (fastq->inbuf == NULL)
 	{
 	    fclose(fastq->fd);
@@ -473,8 +562,18 @@ int fastq_open_next(struct fastq_file *fastq)
 
 	fastq->mzs.next_in = (const unsigned char *) fastq->inbuf;
 	fseek(fastq->fd, 0, SEEK_END);
-	fastq->remaining = ftell(fastq->fd) - 10 - 8; // assume 10 bytes header
-	fseek(fastq->fd, 10, SEEK_SET); // assume 10 bytes header
+	fastq->remaining = ftell(fastq->fd);
+	fseek(fastq->fd, 0, SEEK_SET);
+	ret = skip_gz_header(fastq->fd, 0);
+	if (ret != NULL)
+	{
+	    fclose(fastq->fd);
+	    exception = PyExc_IOError;
+	    snprintf(errstr, ERRSTR_LENGTH, "no valid gzip header found "
+		    "at beginning of file : %s", ret);
+	    return -1;
+	}
+	fastq->remaining -= ftell(fastq->fd);
 
 	// random guess
 	fastq_size_estimated *= 3;
@@ -592,8 +691,10 @@ int fastq_rewind(char *buf, int n)
 size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *fposp)
 {
     size_t n, leftovers, m;
+    long pos;
     int status;
     unsigned int avail_in, avail_out;
+    const char *msg;
 
     profile_start("fastq_read");
     pthread_mutex_lock(&fastq_read_mutex);
@@ -616,7 +717,7 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
 	    return -1;
 	}
 
-	leftovers = MIN(buf_size, fastq->buf_size);
+	leftovers = fastq->buf_size;
 	memcpy(buf, fastq->buf, leftovers);
 	free((void *) fastq->buf);
 	fastq->buf_size = 0;
@@ -662,7 +763,8 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
 	    // inflate inbuf -> buf
 	    avail_in = fastq->mzs.avail_in;
 	    avail_out = fastq->mzs.avail_out;
-	    status = inflate(&fastq->mzs, Z_SYNC_FLUSH);
+	    //DBG("will inflate avail_in=%d avail_out=%d", avail_in, avail_out);
+	    status = mz_inflate(&fastq->mzs, Z_SYNC_FLUSH);
 
 	    if ((status != MZ_OK) && (status != MZ_STREAM_END))
 	    {
@@ -679,22 +781,53 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
 		return -1;
 	    }
 
-	    // update n
+	    // update bytes read in deflated stream
 	    n += avail_out - fastq->mzs.avail_out;
+
 	    /*
 	    DBG("fastq_read [%li] : inflated %d -> %d bytes",
 		    thread_self(),
 		    avail_in - fastq->mzs.avail_in, avail_out - fastq->mzs.avail_out);
 	    */
 
-	} while(status != MZ_STREAM_END && fastq->mzs.avail_out > 0);
+	    // some versions of gzip create files with many successive deflated streams
+	    if (status == MZ_STREAM_END &&
+		    fastq->remaining + fastq->mzs.avail_in > 10)
+	    {
+		// rewind file
+		fseek(fastq->fd, -((long) fastq->mzs.avail_in), SEEK_CUR);
+		fastq->remaining += fastq->mzs.avail_in;
+		// read header -- 2-7 bytes between streams !?
+		pos = ftell(fastq->fd);
+		msg = skip_gz_header(fastq->fd, 10);
+		if (msg != NULL)
+		{
+		    lo_log_msg(LOG_ERROR, "cannot read next deflated stream "
+			    "in compressed file : %s", msg);
+		    fastq->remaining = 0;
+		}
+		else
+		{
+		    fastq->remaining -= ftell(fastq->fd) - pos;
+		    // reset stream
+		    mz_inflateEnd(&fastq->mzs);
+		    mz_inflateInit2(&fastq->mzs, -MZ_DEFAULT_WINDOW_BITS);
+		    // reset input
+		    fastq->mzs.avail_in = 0;
+		}
+	    }
+
+	} while(fastq->remaining + fastq->mzs.avail_in > 10 &&
+		fastq->mzs.avail_out > 0);
+
+	if (fastq->remaining + fastq->mzs.avail_in < 10)
+	    fastq->eof = 1;
+
+	//DBG("status=%d mzs.avail_out=%ld", status, fastq->mzs.avail_out);
 
 	// update guess
 	fastq_size_estimated = (size_t) (
 		(float) fastq->size * (fastq->fpos + n) / (fastq->ftell0 + ftell(fastq->fd)));
-
-	if (fastq->remaining == 0 && status == MZ_STREAM_END)
-	    fastq->eof = 1;
     }
     else
     {
@@ -772,7 +905,7 @@ void fastq_close(struct fastq_file *fastq)
     fclose(fastq->fd);
     if (fastq->buf_size)
 	free((void *) fastq->buf);
-    if (fastq->compressed)
+    if (fastq->inbuf != NULL)
 	free((void *) fastq->inbuf);
     free(fastq);
 }
