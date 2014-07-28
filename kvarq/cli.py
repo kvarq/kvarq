@@ -146,15 +146,12 @@ def scan(args, testsuites):
                 break
 
             print
-            print
             print TextHist(title='readlengths').draw(stats['readlengths'], indexed=True)
 
-            print
-            print 'mean coverages'
-            print '--------------'
             means = sorted([n/len(analyser[i])
                     for i, n in enumerate(stats['nseqbasehits'])])
-            print TextHist().draw(sorted(means), indexed=False)
+            print
+            print TextHist(title='mean coverages').draw(sorted(means), indexed=False)
 
             sigints = stats['sigints']
             sigintt = time.time()
@@ -165,8 +162,10 @@ def scan(args, testsuites):
         sys.exit(ERROR_FASTQ_FORMAT_ERROR)
 
     print >> sys.stderr
-    lo.info('performed scanning of %.2f%% in %.3f seconds'% (
-            1e2*stats['progress'], time.time()-t0))
+    mbp = '%smb'% (stats['parsed']/1024**2)
+    mbt = '%smb'% (stats['total' ]/1024**2)
+    lo.info('performed scanning of %.2f%% (%s/%s, %d records) in %.3f seconds'% (
+            1e2*stats['progress'], mbp, mbt, stats['records_parsed'], time.time()-t0))
 
     # save to file {{{2
     analyser.update_testsuites()
@@ -328,7 +327,7 @@ parser_scan.add_argument('-p', '--progress', action='store_true',
 
 # general
 parser_scan.add_argument('-S', '--no-scan', action='store_true',
-        help='instead of scanning the original file, the provided .json file from a previous scan result is used and the .json structures are re-calculated from the hit-list (see -h); can only be done if version matches and same test suit is used (see -g)')
+        help='instead of scanning the original file, the provided .json file from a previous scan result is used and the .json structures are re-calculated from the hit-list (see --hits); can only be done if version matches and same test suit is used (see --testsuites)')
 
 # scan config
 parser_scan.add_argument('-t', '--threads', action='store', type=int,
@@ -358,7 +357,7 @@ parser_scan.add_argument('-P', '--no-paired', action='store_true',
 parser_scan.add_argument('-f', '--force', action='store_true',
         help='overwrite any existing .json file')
 parser_scan.add_argument('-H', '--hits', action='store_true',
-        help='saves all hits in .json file; this way scan result can be re-used without (see -n)')
+        help='saves all hits in .json file; this way scan result can be re-used without (see --no-scan)')
 
 # main arguments
 parser_scan.add_argument('fastq',

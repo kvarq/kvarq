@@ -11,8 +11,8 @@ Installing KvarQ
 Precompiled packages
 --------------------
 
-You can find pre-compiled packages for OS X and Windows here:
-http://www.siwsstph.ch/kvarq
+The different releases are available als compiled packages for Microsoft
+Windows and OSX (10.6 and later): http://github.com/kvarq/kvarq/releases
 
 Note that the packages are currently **not signed** and you therefore
 have to `enable OS X to run programs from unidentified developers

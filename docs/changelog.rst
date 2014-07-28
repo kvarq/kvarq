@@ -4,14 +4,19 @@
 Changelog
 =========
 
+version 0.12.2
+~~~~~~~~~~~~~~
+
+  - added support for more ``.fastq.gz`` formats
+
 version 0.12.1
 ~~~~~~~~~~~~~~
 
   - support ``.fastq.gz`` files
   - added new ways to :ref:`load testsuites <loading-testsuites>`
-  - added new :ref:`testsuites <testsuites>` to different repositories at
-    http://github.com/kvarq (linked as submodules)
   - some bugfixes in ``scripts/table_{scan|combine}.py``
+  - moved additional :ref:`testsuites <testsuites>` into their own
+    `repositories <https://github.com/kvarq>`_
 
 version 0.11.3
 ~~~~~~~~~~~~~~

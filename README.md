@@ -30,4 +30,3 @@ genomes, <http://www.swisstph.ch/kvarq>.
 [Swiss TPH website]: <http://www.swisstph.ch/kvarq>
 [GNU GPLv3]: <http://www.gnu.org/licenses/gpl-3.0.html>
 [online documentation]: <http://kvarq.readthedocs.org>
-

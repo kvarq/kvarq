@@ -158,7 +158,7 @@ class TextHist:
             N = int(log(len(data))/log(10)) +1
         else:
             if data[-1]==0:
-                return '*** cannot draw histogram because all data zero ***'
+                return 'all data zero --> CANNOT GENERATE HISTOGRAM'
             bw = (data[-1]-data[0])/float(self.bins)
             N = int(log(data[-1])/log(10)) +1
         if not bw:
@@ -187,6 +187,8 @@ class TextHist:
                 i += 1
         if x:
             xs.append(x)
+            sx += x
+            if x > mx: mx = x
 
         fmt = '[%%%dd-%%%dd] %%%dd (%%2d%%%%)'%(
                 max(N,4), max(N,4), int(log(max(1, mx))/log(10)) +1)
