@@ -16,6 +16,7 @@ Contents
    cli.rst
    gui.rst
    testsuites.rst
+   tutorial.rst
    understanding.rst
    hacking.rst
    glossary.rst
