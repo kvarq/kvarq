@@ -71,10 +71,9 @@ many of the specified SNPs have been found for every sublineage.  The reference
 genome ``EBOV76.fasta`` is the first genome found in the file
 ``ebov.mafft.fasta``.
 
-Here is the complete code of the testsuite:
+View the complete source code of the testsuite `on github`_.
 
-.. literalinclude:: ../testsuites/ebola-sierraleone14/sierraleone14.py
-
+.. _on github: https://github.com/kvarq/kvarq-ebola-sierraleone14/blob/master/sierraleone14.py
 .. _KvarQ Ebola sierraleone14 testsuite: https://github.com/kvarq/kvarq-ebola-sierraleone14/archive/master.zip
 .. _Science webpage: http://www.sciencemag.org/content/345/6202/1369/suppl/DC1
 
