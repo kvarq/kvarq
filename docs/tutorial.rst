@@ -76,7 +76,7 @@ Here is the complete code of the testsuite:
 .. literalinclude:: ../testsuites/ebola-sierraleone14/sierraleone14.py
 
 .. _KvarQ Ebola sierraleone14 testsuite: https://github.com/kvarq/kvarq-ebola-sierraleone14/archive/master.zip
-.. _Sci webpage: http://www.sciencemag.org/content/345/6202/1369.full
+.. _Science webpage: http://www.sciencemag.org/content/345/6202/1369/suppl/DC1
 
 Running the Testsuite
 ~~~~~~~~~~~~~~~~~~~~~
