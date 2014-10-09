@@ -1,5 +1,5 @@
 
-VERSION = '1.0'
+VERSION = '1.1'
 from kvarq.genes import COMPATIBILITY as GENES_COMPATIBILITY
 
 from kvarq.genes import Genotype, Test, Reference, SNP, Testsuite
@@ -98,6 +98,8 @@ rrsK = DrugResistance('Kanamycin/Amikacin', Gene(ancestor,'rrs', 1471846, 147338
 
 embB = DrugResistance('Ethambutol', Gene(ancestor,'embB', 4246514, 4249810))
 
+pncA = DrugResistance('Pyrazinamide', Gene(ancestor,'pncA', 2288681, 2289241, plus_strand=False))
+
 
 comas12 = Reference('Comas et al 2012 Nat Gen: Compensatory mutations...')
 ramaswamy98 = Reference('Ramaswamy et al., Tuber Lung Dis 1998')
@@ -105,6 +107,7 @@ sun08 = Reference('Sun et al., Antimicr Agents 2008')
 tbdream = Reference('TBDReamDB')
 sebastien = Reference('Sebastien')
 sebastien_= Reference('Sebastien ?')
+david = Reference('David')
 
 
 
@@ -184,6 +187,7 @@ resistance_regions = [
     Test(TemplateFromGenome(genome=ancestor, start=2155167, stop=2155169, direction='-', aa_pos0=(2155167-2153889)/3 +1), katG, ramaswamy98),
     Test(TemplateFromGenome(genome=ancestor, start=761082, stop=761162), RRDR, ramaswamy98),
     Test(TemplateFromGenome(genome=ancestor, start=7521, stop=7583, poslist=[7521, 7522, 7523, 7569, 7570, 7571, 7572, 7573, 7574, 7581, 7582, 7583]), QRDR, sun08),
+    Test(TemplateFromGenome(genome=ancestor, start=2288681, stop=2289241, direction='-'), pncA, david),
 
 ]
 
