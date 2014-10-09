@@ -43,7 +43,7 @@ file included below (can be found in the ``testsuites/`` directory of the
 :ref:`source distribution <install-from-source>`).  After having developed
 a testsuite and tested it on your data, please `send me a note
 <mailto:andreas.steiner@unibas.ch>`_ and I will include a link in the KvarQ
-distribution.
+distribution.  See :ref:`ebola14` for a tutorial on how to write a testsuite.
 
 .. literalinclude:: ../testsuites/MTBC/example.py
   :language: python

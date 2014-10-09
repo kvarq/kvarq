@@ -87,6 +87,9 @@ pygments_style = 'sphinx'
 # A list of ignored prefixes for module index sorting.
 #modindex_common_prefix = []
 
+# insert class' docstring as well as __init__ method's
+autoclass_content = 'both'
+
 
 # -- Options for HTML output ---------------------------------------------------
 
@@ -99,8 +102,8 @@ if not on_rtd:  # only import and set the theme if we're building docs locally
         html_theme = 'sphinx_rtd_theme'
         html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
     except ImportError, e:
-        print '[4;31mfailed to import sphinx_rtd_theme[m ' + \
-                'fall back haiku'
+        print('[4;31mfailed to import sphinx_rtd_theme[m ' + \
+                'fall back haiku')
         html_theme = 'haiku'
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
