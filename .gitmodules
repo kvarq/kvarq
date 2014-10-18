@@ -3,4 +3,7 @@
 	url = git@github.com:kvarq/kvarq-CanSNPer.git
 [submodule "testsuites/ebola-sierraleone14"]
 	path = testsuites/ebola-sierraleone14
-	url = git@github.com:kvarq/kvarq-ebola-sierraleone14.git
+	url = https://github.com/kvarq/kvarq-ebola-sierraleone14.git
+[submodule "testsuites/MTBC-SNP-barcodes"]
+	path = testsuites/MTBC-SNP-barcodes
+	url = https://github.com/kvarq/kvarq-MTBC-SNP-barcodes.git
