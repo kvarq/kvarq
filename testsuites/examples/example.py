@@ -5,7 +5,8 @@
 # the testsuite can be included during the scanning by using the
 # command line parameter '-t' or in the configuration window in the GUI
 
-# see the kvarq documentation for more information
+# see the kvarq documentation for more information:
+# http://kvarq.readthedocs.org/en/latest/testsuites.html
 
 
 # the version specifies the version of the testsuite itself; this version
@@ -27,10 +28,12 @@ GENES_COMPATIBILITY = '0.0'
 # we use these classes to define our testsuite
 from kvarq.genes import Genotype, Gene, Test, Testsuite, Reference, SNP, TemplateFromGenome
 
-# load hypothetical MTB ancestor genome from local directory
+# load hypothetical MTB ancestor genome from '../MTBC' directory
+# (shipped together with KvarQ)
 from kvarq.genes import Genome
 import os.path
-ancestor_path = os.path.join(os.path.dirname(__file__), 'MTB_ancestor_reference.bases')
+MTBC_dir = os.path.join(os.path.dirname(__file__), os.pardir, 'MTBC')
+ancestor_path = os.path.join(MTBC_dir, 'MTB_ancestor_reference.bases')
 ancestor = Genome(ancestor_path, 'MTB ancestor')
 
 # use this for loggging (displayed on console / in main GUI window)

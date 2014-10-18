@@ -1,5 +1,5 @@
 
-VERSION = '0.6'
+VERSION = '0.7'
 from kvarq.genes import COMPATIBILITY as GENES_COMPATIBILITY
 
 from kvarq.log import lo
@@ -76,11 +76,16 @@ class PhyloTestsuite(Testsuite):
                     if sls:
                         mls[-1] += '/' + '-'.join(sls)
 
-        coverages = sorted([coverage.mean(include_margins=False)
+        depths = sorted([coverage.mean(include_margins=False)
                 for coverage in coverages.values()])
         remark = ''
-        if coverages[len(coverages)/2] < 10:
-            remark = ' -- low coverage (median below 10x)'
+
+        if depths[len(depths)/2] < 10:
+            remark += ' -- low coverage (median below 10x)'
+
+        mixed = sum([coverage.mixed() for coverage in coverages.values()])
+        if mixed:
+            remark += ' -- mixed coverage'
 
         if not mls:
             return '?' + remark

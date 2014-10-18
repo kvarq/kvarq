@@ -1,5 +1,5 @@
 
-VERSION = '1.1'
+VERSION = '2.0'
 from kvarq.genes import COMPATIBILITY as GENES_COMPATIBILITY
 
 from kvarq.genes import Genotype, Test, Reference, SNP, Testsuite
@@ -15,6 +15,10 @@ class ResistanceTestsuite(Testsuite):
     def _analyse(self, coverages):
         ret = []
 
+        # will be set to True if any of the regions / SNPs has maximum
+        # variant base below 90% (no matter whether templates validate or not)
+        mixed = False
+
         for test in self.tests:
 
             coverage = coverages[test]
@@ -22,13 +26,22 @@ class ResistanceTestsuite(Testsuite):
 
             # a) SNPs
             if isinstance(test.template, SNP):
+                minf = coverage.minf()
+                if minf < 0.9:
+                    mixed = True
                 if test.template.validate(coverage):
                     ret.append(str(test))
                     ret[-1] += '=' + test.genotype.gene.mut2str(
                             test.template.start, test.template.base)
+                    # show percentage of most prominent base at SNP position
+                    # if it's below 90%
+                    if minf < 0.9:
+                        ret[-1] += ' (' + str(int(100 * minf)) + '%)'
                 continue
 
             # b) regions
+            if not mixed and coverage.minf() < 0.9:
+                mixed = True
             mutations = test.template.mutations(coverage)
             output = []
             for pos, newbase in mutations:
@@ -41,11 +54,15 @@ class ResistanceTestsuite(Testsuite):
                     output[-1] += '=' + test.genotype.gene.mut2str(
                             pos + test.template.start, newbase)
 
+                mutf = coverage.fractions_at(pos).values()[0]
+                if mutf < 0.9:
+                    output[-1] += ' (' + str(int(100 * minf)) + '%)'
+
             aa1 = test.template.transcribe()
             aa2 = test.template.transcribe(mutations)
 
             # ignore resistance mutations without aa change
-            if aa1 == aa2:
+            if test.genotype.gene.coding and aa1 == aa2:
                 continue
 
             # notify if mutation is not in "poslist"
@@ -61,6 +78,8 @@ class ResistanceTestsuite(Testsuite):
         assert len(RRDR_tests) == 1
         if coverages[RRDR_tests[0]].mean(include_margins=False) < 10:
             ret.append('remark: low coverage (RRDR below 10x)')
+        if mixed:
+            ret.append('remark: mixed coverage')
 
         return ret
 
@@ -93,8 +112,9 @@ gyrB = DrugResistance('Fluoroquinolones', Gene(ancestor,'gyrB', 5123, 7267))
 
 rpsL = DrugResistance('Streptomycin', Gene(ancestor,'rpsL', 781560, 781934))
 
-rrsS = DrugResistance('Streptomycin', Gene(ancestor,'rrs', 1471846, 1473382))
-rrsK = DrugResistance('Kanamycin/Amikacin', Gene(ancestor,'rrs', 1471846, 1473382))
+#TODO report position only, is in ribosomal RNA ...
+rrsS = DrugResistance('Streptomycin', Gene(ancestor,'rrsS', 1471846, 1473382))
+rrsK = DrugResistance('Kanamycin/Amikacin', Gene(ancestor,'rrsK', 1471846, 1473382))
 
 embB = DrugResistance('Ethambutol', Gene(ancestor,'embB', 4246514, 4249810))
 
@@ -112,15 +132,6 @@ david = Reference('David')
 
 
 resistance_SNPs = [
-
-#    Test(SNP(genome=ancestor, pos=2155167, orig='G', base='T'), katG, ramaswamy98),
-#    Test(SNP(genome=ancestor, pos=2155167, orig='G', base='C'), katG, ramaswamy98),
-#    Test(SNP(genome=ancestor, pos=2155168, orig='C', base='A'), katG, ramaswamy98),
-#    Test(SNP(genome=ancestor, pos=2155168, orig='C', base='T'), katG, ramaswamy98),
-#    Test(SNP(genome=ancestor, pos=2155168, orig='C', base='G'), katG, ramaswamy98),
-#    Test(SNP(genome=ancestor, pos=2155169, orig='T', base='A'), katG, ramaswamy98),
-#    Test(SNP(genome=ancestor, pos=2155169, orig='T', base='C'), katG, ramaswamy98),
-#    Test(SNP(genome=ancestor, pos=2155169, orig='T', base='G'), katG, ramaswamy98),
 
     Test(SNP(genome=ancestor, pos=2155276, orig='C', base='T'), katG, tbdream),
     Test(SNP(genome=ancestor, pos=1673432, orig='T', base='A'), inhA, tbdream),
