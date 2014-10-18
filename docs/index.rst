@@ -20,6 +20,7 @@ Contents
    understanding.rst
    hacking.rst
    glossary.rst
+   cite.rst
    changelog.rst
 
 

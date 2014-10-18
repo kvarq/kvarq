@@ -6,12 +6,15 @@ from kvarq.gui.explorer import JsonExplorer
 from kvarq.engine import Hit
 from kvarq.util import ProgressBar
 from kvarq.gui.util import open_help, ThemedTk, askopenfilename
+from kvarq.testsuites import load_testsuites
+from kvarq.config import config_params
 
 import Tkinter as tk
 import tkFont
 import tkFileDialog
 import tkMessageBox
 
+import os
 import os.path
 import glob
 import sys
@@ -34,9 +37,12 @@ class AnalyseThread(threading.Thread):
 
     def run(self):
         try:
+#            lo.debug('AnalyseThread : start')
             self.analyser.scan(self.fastq, self.testsuites)
+#            lo.debug('AnalyseThread : stop')
             self.finished = True
         except Exception, e:
+#            lo.debug('AnalyseThread : exception')
             self.exception = e
 
     def stop(self):
@@ -44,14 +50,60 @@ class AnalyseThread(threading.Thread):
         self.stopped = True
 
 
+class TestsuiteSelector(ThemedTk):
+
+    def __init__(self, testsuite_paths):
+        ThemedTk.__init__(self)
+
+        label = tk.Label(self, text='select testsuites for scan:')
+        label.pack(anchor='w')
+
+        self.values = {}
+        self.buttons = []
+        for name in sorted(testsuite_paths):
+            self.values[name] = False
+
+            def make_toggle(name):
+                def toggle(e=None):
+                    self.values[name] = not self.values[name]
+                return toggle
+
+            button = tk.Checkbutton(self, text=name, command=make_toggle(name))
+            button.pack(anchor='w')
+            self.buttons.append(button)
+
+        self.disabled = False
+        self.closed = False
+        self.protocol('WM_DELETE_WINDOW', self.closing)
+
+    def closing(self, e=None):
+        self.closed = True
+        self.destroy()
+
+    def selection(self):
+        return [
+                name for name, value in self.values.items()
+                if value
+            ]
+
+    def disable(self):
+        if not self.closed:
+            for button in self.buttons:
+                button.config(state='disabled')
+        self.disabled = True
+
+
 class SimpleGUI(ThemedTk):
 
-    def __init__(self, settings):
+    def __init__(self, settings, testsuites, testsuite_paths):
         self.settings = settings
+        self.testsuites = testsuites # all loaded testsuites
+        self.testsuite_paths = testsuite_paths
 
         self.fastqi = -1
         self.analysers = {}
-        self.fastqs = self.askfastqs()
+        self.fastqs, self.paireds = self.askfastqs()
+
         if self.fastqs is not None:
             self.init_gui()
             self.next_fastq()
@@ -61,6 +113,9 @@ class SimpleGUI(ThemedTk):
         ThemedTk.__init__(self, title='scan .fastq files')
 
         self.bind('<Destroy>', self.destroy_cb)
+
+        self.selector = TestsuiteSelector(self.testsuite_paths)
+        self.selected_testsuites = {} # testsuites selected for scanning
 
         self.analyser = None
         self.running = False
@@ -99,33 +154,49 @@ class SimpleGUI(ThemedTk):
             self.save.config(text='save all')
 
         self.resizable(0, 0)
+        self.protocol('WM_DELETE_WINDOW', self.closing)
+
+
+    def closing(self, e=None):
+        if not self.selector.closed:
+            self.selector.destroy()
+        self.destroy()
 
 
     def askfastqs(self):
+        ''' asks user to select '*.fastq' and '*.fastq.gz' files and returns
+            a list of fastq files and a list of booleans indicating whether
+            the corresponding file should be scanned in 'paired' mode 
+            (or ``None, None`` if canceled)'''
 
-        ret = None
-        while ret is None:
+        fastqs = askopenfilename(
+                initialdir=os.getcwd(),
+                multiple=True,
+                filetypes=[
+                    ('fastq files', '*.fastq'),
+                    ('compressed fastq files', '*.fastq.gz')],
+                title='select .fastq files to analyze')
 
-            fastqs = askopenfilename(
-                    multiple=True,
-                    filetypes=[
-                        ('fastq files', '*.fastq'),
-                        ('compressed fastq files', '*.fastq.gz')],
-                    title='select .fastq files to analyze')
+        if not fastqs:
+            return None, None
 
-            if not fastqs:
-                return None
+        fastqs = sorted(fastqs)
+        paireds = []
+        idx = 0
+        while idx < len(fastqs) - 1:
+            base1 = fastqs[idx]  [:fastqs[idx]  .rindex('.fastq')]
+            base2 = fastqs[idx+1][:fastqs[idx+1].rindex('.fastq')]
+            if len(base1) > 2 and len(base2) > 2 and \
+                    base1[-2:] == '_1' and base2[-2:] == '_2' and \
+                    base1[:-2] == base2[:-2]:
+                paireds.append(True)
+                del fastqs[idx+1]
+            else:
+                paireds.append(False)
+            idx += 1
+        paireds.append(False)
 
-            ret = fastqs
-            for fastq in fastqs:
-                if not os.path.isfile(fastq) and fastq.lower().endswith('.fastq'):
-                    tkMessageBox.showerror(
-                            'invalid file selected',
-                            '"%s" does not seem to be a .fastq file' % fastq)
-                    ret = None
-                    break
-
-        return ret
+        return fastqs, paireds
 
 
     def has_more_fastq(self):
@@ -140,7 +211,8 @@ class SimpleGUI(ThemedTk):
                 return False
 
             try:
-                self.fastq = Fastq(self.fastqs[self.fastqi])
+                self.fastq = Fastq(self.fastqs[self.fastqi],
+                        paired=self.paireds[self.fastqi])
             except FastqFileFormatException, e:
                 lo.error('cannot load file %s : %s'%(self.fastqs[self.fastqi], str(e)))
                 if n == 1:
@@ -160,20 +232,33 @@ class SimpleGUI(ThemedTk):
 
 
     def startstop(self):
+
+        if not self.selected_testsuites:
+
+            selection = self.selector.selection()
+            if not selection:
+                tkMessageBox.showerror('no testsuite selected',
+                        'please select at least one testsuite before scanning')
+                if self.selector.closed:
+                    self.selector = TestsuiteSelector(self.testsuite_paths)
+                return
+
+            difference = set(selection) - set(self.testsuites.keys())
+            self.selector.disable()
+            testsuites = load_testsuites(self.testsuite_paths, difference)
+            self.testsuites.update(testsuites)
+            for name in selection:
+                self.selected_testsuites[name] = self.testsuites[name]
+
         if not self.running:
             # "start"
             self.analyser = analyse.Analyser()
 
-            engine.config(
-                    nthreads=self.settings.config['threads'],
-                    maxerrors=self.settings.config['errors'],
-                    minreadlength=self.settings.config['minimum readlength'],
-                    minoverlap=self.settings.config['minimum overlap'],
-                    Amin=self.fastq.Q2A(self.settings.config['quality']),
-                    Azero=self.fastq.Azero
-                )
+            
+            engine.config(**config_params(self.settings.config, self.fastq))
 
-            self.at = AnalyseThread(self.analyser, self.fastq, self.settings.get_testsuites())
+            self.at = AnalyseThread(self.analyser, self.fastq,
+                    self.selected_testsuites)
             self.t0 = time.time()
             self.at.start()
             self.pb.start()
@@ -208,7 +293,7 @@ class SimpleGUI(ThemedTk):
 
         if not self.running:
             self.at.stop()
-            self.at.join()
+            #self.at.join() # deadlocks...!?
             lo.info('STOPPED scanning via GUI after %.3f seconds'% (time.time()-self.t0))
             self.finish_scanning()
             self.running = False
@@ -238,7 +323,11 @@ class SimpleGUI(ThemedTk):
                 self.pblabel.config(text=str(self.pb)[:str(self.pb).index(']')+1]+' -- done')
                 self.finish_scanning()
             if self.at.exception:
-                lo.error('could not scan %s : %s'%(self.fastq.fname, str(self.at.exception)))
+                lo.error('could not scan %s : %s' %
+                        (self.fastq.fname, str(self.at.exception)))
+                tkMessageBox.showerror('could not scan',
+                        'the scanning of the file "%s" could not be completed : %s' % (
+                        self.fastq.fname, self.at.exception))
             self.running = False
             self.at = None
             if self.next_fastq():
@@ -251,7 +340,8 @@ class SimpleGUI(ThemedTk):
         if self.analyser.results is None:
             tkMessageBox.showinfo('no results yet', 'please stop/finish the scanning first')
             return
-        explorer = JsonExplorer(self.analyser, testsuites=self.settings.get_testsuites())
+        explorer = JsonExplorer(self.analyser,
+                testsuites=self.testsuites, testsuite_paths=self.testsuite_paths)
 
     def save_cb(self):
 
@@ -290,6 +380,7 @@ class SimpleGUI(ThemedTk):
                 toc('dumping json')
 
     def destroy_cb(self, x=None):
+        #self.selector.destroy()
         if self.running:
             self.at.stop()
             self.at.join()

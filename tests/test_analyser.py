@@ -13,16 +13,16 @@ import os.path
 
 
 MTBCpath = os.path.join(os.path.dirname(__file__), os.path.pardir, 'testsuites', 'MTBC')
-name, phylo = genes.load_testsuite(os.path.join(MTBCpath, 'phylo.py'))
-name, spoligo = genes.load_testsuite(os.path.join(MTBCpath, 'spoligo.py'))
+phylo = genes.load_testsuite(os.path.join(MTBCpath, 'phylo.py'))
+spoligo = genes.load_testsuite(os.path.join(MTBCpath, 'spoligo.py'))
 
 
 class AnalyserTest(unittest.TestCase):
-    
+
     ''' tests :py:mod:`kvarq.analyse` '''
 
     def setUp(self):
-        self.fname = os.path.join(os.path.dirname(__file__),
+        self.fname = os.path.join(os.path.dirname(__file__), 'fastqs',
                 'test_analyser.fastq')
         engine.config(nthreads=1, minoverlap=10)
         from kvarq.log import set_warning
@@ -69,16 +69,42 @@ class AnalyserTest(unittest.TestCase):
 
 
     def test_coverage(self):
+        #   AACCGGTT    : template
+        #   ATCCGGTTTT  : hit1
+        # AAAACCGGTT    : hit2
+        #  AATCCGGTTA   : hit3
         seq = genes.Sequence('AACCGGTT')
         cov = Coverage(seq)
-        cov.apply_hit(Hit(seq_nr=0, file_pos=-1, seq_pos=0, length=8, readlength=10), 'ATCCGGTTTT', on_plus_strand=True)
+
+        # hit1
+        cov.apply_hit(
+                Hit(seq_nr=0, file_pos=-1, seq_pos=0, length=8, readlength=10),
+                'ATCCGGTTTT', on_plus_strand=True)
         #print cov.serialize()
+        assert cov.minf() == 1
+        assert not cov.mixed()
         assert tuple(cov.coverage) == tuple( [1]*8 )
         assert 1 in cov.mutations
         cov.deserialize(cov.serialize())
         assert tuple(cov.coverage) == tuple( [1]*8 )
         assert 1 in cov.mutations
 
+        # hit2
+        cov.apply_hit(
+                Hit(seq_nr=0, file_pos=-1, seq_pos=-2, length=8, readlength=10),
+                'AACCGGTT', on_plus_strand=True)
+        # hit3
+        cov.apply_hit(
+                Hit(seq_nr=0, file_pos=-1, seq_pos=-1, length=8, readlength=10),
+                'ATCCGGTTA', on_plus_strand=True)
+
+        assert cov.minf() > 0.65 and cov.minf() < 0.69
+        assert cov.mixed()
+        fs = cov.fractions_at(1)
+        assert fs.keys()[0] == 'T'
+        assert fs.values()[0] > 0.65
+        assert fs.keys()[1] == 'A'
+        assert fs.values()[1] < 0.35
 
 if __name__ == '__main__': unittest.main()
 

@@ -108,7 +108,15 @@ integers as well as strings and :py:class:`Test <kvarq.genes.Test>`).
 About clonal variants ("heterozygous calls")
 --------------------------------------------
 
-  - phylogenetic : in current implementation >50% must be present of SNP to
-    be accepted; this leads to complete dominance of the clone with >50%
-    genetic material in the mixture; see :py:meth:`kvarq.genes.SNP.validate`
+When the DNA is not extracted with great care from single colonies, this can
+easily result in mixed DNA from different clones.  Although KvarQ is not
+designed to interpret polyclonal variants, the
+:py:class:`kvarq.analyse.Coverage` lists detailed information about the
+frequency of every mutation and new testsuites can use this information to
+interpret the results of mixed colony sequencing.
+
+Currently, the :ref:`explorer <explorer>` displays clonal variants (defined as
+base calls with the most dominant base below 90%) with ``~`` sign, and the
+``MTBC/phylo`` as well as the ``MTBC/resistance`` testsuites display a remark,
+when sequencing date seems to stem from a mixed population sequencing.
 

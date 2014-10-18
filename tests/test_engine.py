@@ -31,12 +31,12 @@ class FastqGenerator:
         self.debug = debug
 
         self.variant = None
-        for name, pos_range, dQ in Fastq.vendor_variants:
+        for name, vendor_variant in Fastq.vendor_variants.items():
             if variant == name:
                 self.variant = name
-                self.dQ = dQ
-                self.pos_min = pos_range[0]
-                self.pos_max = pos_range[-1]
+                self.dQ = vendor_variant.dQ
+                self.pos_min = vendor_variant.Qrange[0]
+                self.pos_max = vendor_variant.Qrange[-1]
                 break
 
         assert self.variant
@@ -114,21 +114,25 @@ class FastqGenerator:
         self.fd.flush()
 
 
-class TestEngine(unittest.TestCase):
+class EngineTest(unittest.TestCase):
 
-    def tmpfname(self):
-        return os.path.splitext(__file__)[0] + '_tmp.fastq'
+    @classmethod
+    def setUpClass(cls):
+        fastqs = os.path.join(os.path.dirname(__file__), 'fastqs')
+        cls.fname = os.path.join(fastqs, 'test_engine.fastq')
+        cls.fname_1 = os.path.join(fastqs, 'test_engine_1.fastq')
+        cls.fname_2 = os.path.join(fastqs, 'test_engine_2.fastq')
+        engine.config(nthreads=1)
+        cls.tfn = tempfile.NamedTemporaryFile(suffix='.fastq', delete=False)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tfn.close()
+        os.remove(cls.tfn.name)
 
     def setUp(self):
-        self.fname = os.path.join(os.path.dirname(__file__), 'test_engine.fastq')
-        self.fname_1 = os.path.join(os.path.dirname(__file__), 'test_engine_1.fastq')
-        self.fname_2 = os.path.join(os.path.dirname(__file__), 'test_engine_2.fastq')
-        engine.config(nthreads=1)
-
-    def tearDown(self):
-        if os.path.exists(self.tmpfname()):
-            os.unlink(self.tmpfname())
-
+        engine.config(nthreads=1, maxerrors=2, minoverlap=25,
+                Amin='!', Azero='!')
 
     def test_findseqs(self, gz=False):
         ''' find specified sequences in handwritten .fastq file '''
@@ -170,11 +174,14 @@ class TestEngine(unittest.TestCase):
 
         assert x == [19,1,0,1,1,1,1]
 
+
     def test_gz(self):
         ''' test engine gzip functionality '''
         self.test_findseqs(gz=True)
+        self.test_paired(gz=True)
 
-    def test_paired(self):
+
+    def test_paired(self, gz=False):
         engine.config(maxerrors=0, minoverlap=1000, minreadlength=3, Amin='!')
         seqs = (
             "CCC", # "CCCC" should be counted 2x ...
@@ -186,10 +193,17 @@ class TestEngine(unittest.TestCase):
             "...NACTTCCTCTCTACTGGTGTCGGCGGTGAAAGAGCTTACGTACTCTTCGAT...",
         )
 
-        ret = engine.findseqs(self.fname, seqs)
-        ret_12 = engine.findseqs((self.fname_1, self.fname_2), seqs)
+        fname = self.fname
+        fnames = (self.fname_1, self.fname_2)
+        if gz:
+            fname += '.gz'
+            fnames = (self.fname_1 + '.gz', self.fname_2 + '.gz')
+
+        ret = engine.findseqs(fname, seqs)
+        ret_12 = engine.findseqs(fnames, seqs)
 
         assert ret == ret_12
+
 
     def test_maxerror(self):
         ''' test different values for ``maxerror`` config parameter '''
@@ -245,7 +259,7 @@ class TestEngine(unittest.TestCase):
                 "GGAG",
                 "CCGAC",
             )
-        engine.config(Amin='H', minreadlength=4)
+        engine.config(Amin='H', minreadlength=4, maxerrors=0)
         ret = engine.findseqs(self.fname, seqs)
 
         assert len(ret['hits']) == 1
@@ -258,8 +272,7 @@ class TestEngine(unittest.TestCase):
 
 
     def test_hits(self):
-        fname = self.tmpfname()
-        fq = FastqGenerator(self.tmpfname(), force=True)
+        fq = FastqGenerator(self.tfn.name, force=True)
         seq = fq.randseq(51)
 
         minoverlap = 25
@@ -274,7 +287,7 @@ class TestEngine(unittest.TestCase):
         fq.flush()
         #print "\033[94mfilesize=%.2f MB\033[m" % (fq.size() / 1024. / 1024.)
 
-        fq = Fastq(fname)
+        fq = Fastq(self.tfn.name, quiet=True)
 
         engine.config(
                 nthreads=3,
@@ -310,39 +323,39 @@ class TestEngine(unittest.TestCase):
 
     def test_fastq(self):
 
-        file(self.tmpfname(), 'w').write('''_IDENTIFIER
+        file(self.tfn.name, 'w').write('''_IDENTIFIER
 ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT
 +
 #############################################
 ''')
         try:
-            engine.findseqs(self.tmpfname(), [])
+            engine.findseqs(self.tfn.name, [])
             assert False, "malformed @IDENTIFIER must raise FastqFileFormatException"
         except FastqFileFormatException:
             pass
 
-        file(self.tmpfname(), 'w').write('''@IDENTIFIER
+        file(self.tfn.name, 'w').write('''@IDENTIFIER
 ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT
 -
 #############################################
 ''')
         try:
-            engine.findseqs(self.tmpfname(), [])
+            engine.findseqs(self.tfn.name, [])
             assert False, "malformed 3rd line must raise FastqFileFormatException"
         except FastqFileFormatException:
             pass
 
 
     def test_forward_fastq(self):
-        engine.config(Amin='#', nthreads=2)
+        engine.config(Amin='#', nthreads=2, minoverlap=80)
         for n in [3, 5, 7, 133]:
             for plus in ['+', '+IDENTIFIER']:
                 for cr in ['\n', '\r\n']:
                     record = '@IDENTIFIER' + cr + 'A' * 80 + cr + \
                             plus + cr + '#' * 80 + cr
-                    file(self.tmpfname(), 'wb').write(record * n)
-                    Fastq(self.tmpfname())
-                    ret = engine.findseqs(self.tmpfname(), ['A'*80])
+                    file(self.tfn.name, 'wb').write(record * n)
+                    Fastq(self.tfn.name, quiet=True)
+                    ret = engine.findseqs(self.tfn.name, ['A'*80])
                     assert len(ret['hits']) == n
 
 

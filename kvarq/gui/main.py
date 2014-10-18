@@ -5,6 +5,8 @@ from kvarq.gui.settings import Settings
 from kvarq.gui.simple import SimpleGUI
 from kvarq.gui.explorer import DirectoryExplorer
 from kvarq.gui.util import open_help, ThemedTk
+from kvarq.testsuites import discover_testsuites, load_testsuites
+from kvarq.config import default_config
 
 import sys
 import Tkinter as tk
@@ -12,7 +14,6 @@ import tkMessageBox
 import tkFont
 import webbrowser
 import logging
-
 
 
 class GuiLogHandler(logging.Handler):
@@ -66,23 +67,34 @@ class GuiLogHandler(logging.Handler):
 
 class MainGUI(ThemedTk):
 
-    def __init__(self, testsuites=None):
+    def __init__(self, testsuite_paths):
         ThemedTk.__init__(self)
 
-        self.settings = Settings(testsuites=testsuites)
+        self.settings = Settings(default_config)
+        self.testsuite_paths = testsuite_paths
+        self.testsuites = {}
 
         frame = tk.Frame(self)
-        self.config = tk.Button(frame, text='settings', command=self.do_config)
-        self.config.pack()
+
         self.scan = tk.Button(frame, text='scan .fastq files', command=self.do_scan)
         self.scan.pack()
+
         self.explore = tk.Button(frame, text='explore .json files', command=self.do_explore)
         self.explore.pack()
+
+        dummy = tk.Label(frame)
+        dummy.pack()
+
+        self.config = tk.Button(frame, text='settings', command=self.do_config)
+        self.config.pack()
+
         self.help = tk.Button(frame, text='help', command=open_help)
         self.help.pack()
+
         if logfn:
             self.showlog = tk.Button(frame, text='show log file', command=self.do_showlog)
             self.showlog.pack()
+
         frame.pack(side='left', padx=10)
 
         outer = tk.Frame(self, borderwidth=1, relief='ridge')
@@ -107,22 +119,19 @@ class MainGUI(ThemedTk):
         lo.addHandler(self.log_handler)
         lo.debug('GUI started')
 
+    def do_selection(self, e=None):
+        pass
+
     def do_config(self, e=None):
         self.settings.show()
 
     def do_scan(self, e=None):
-        if not self.settings.get_testsuites():
-            tkMessageBox.showerror('No testsuite loaded',
-                    'Please load first at least one testsuite in the settings dialog')
-            return
-        SimpleGUI(self.settings)
+        SimpleGUI(self.settings,
+                testsuites=self.testsuites, testsuite_paths=self.testsuite_paths)
 
     def do_explore(self, e=None):
-        if not self.settings.get_testsuites():
-            tkMessageBox.showerror('No testsuite loaded',
-                    'Please load first at least one testsuite in the settings dialog')
-            return
-        DirectoryExplorer(None, testsuites=self.settings.get_testsuites())
+        DirectoryExplorer(None,
+                testsuites=self.testsuites, testsuite_paths=self.testsuite_paths)
 
     def do_showlog(self, e=None):
         logwin = ThemedTk(title='contents of logfile (%s)' % logfn, geometry=(-200, -200))
@@ -151,6 +160,6 @@ class MainGUI(ThemedTk):
 
 if __name__=='__main__':
 
-    win = MainGUI()
+    win = MainGUI(testsuite_paths=discover_testsuites())
     tk.mainloop()
 

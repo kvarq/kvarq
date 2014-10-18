@@ -22,6 +22,14 @@ class GenesTest(unittest.TestCase):
         assert MTB10.mut2str(1021600, 'C') == 'MTB10.T15R'
         assert MTB10.mut2str(1021601, 'A') == 'MTB10.T15S'
 
+        # rRNA, not coding
+        rrsS = Gene(ancestor, 'rrsS', 1471846, 1473382, coding=False)
+        assert rrsS.mut2str(1471850, 'C') == 'rrsS.5GC'
+
+        # purely hypothetical
+        rrsS_rev = Gene(ancestor, 'rrsS_rev', 1471846, 1473382, coding=False,
+                plus_strand=False)
+        assert rrsS_rev.mut2str(1473381, 'T') == 'rrsS_rev.2GA'
 
     def test_SNP(self):
 

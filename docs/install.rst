@@ -32,18 +32,9 @@ The source code is hosted in a git repository at http://github.com/kvarq/kvarq
 Dependencies
 ~~~~~~~~~~~~
 
-``kvarq``'s core functionality is based on the standard library
-included with every python distribution. there are a couple of
-additional packages that are used for specific (optional) tasks:
-
-  - **xlwt** : ``scripts/table_combine.py`` uses this package to
-    save output to Microsoft Excel tables; also used by the
-    :ref:`explorer <explorer>` when exporting data from multiple
-    ``.json`` files
-  - **xlrd** : ``scripts/table_scan.py`` uses this package to parse
-    Microsoft Excel tables
-  - **sphinx** : is used to re-generate the html documentation in
-    ``docs/`` from its ``.rst`` source files
+KvarQ does not have any external dependencies, apart from
+Sphinx_ for building the html documentation from the ``docs/*.rst``
+sources files.
 
 
 .. _install-from-source-linux:
@@ -53,7 +44,9 @@ Linux
 
 in case your system runs a python older than version **2.7**, you have
 to install a newer version of python first; this is easiest done
-locally::
+locally
+
+.. code-block:: bash
 
     wget http://www.python.org/ftp/python/2.7.4/Python-2.7.4.tgz
     tar xzf Python-2.7.4.tgz
@@ -71,7 +64,9 @@ then download and install `setuptools <https://pypi.python.org/pypi/setuptools>`
 
 download the latest source distribution and build (calling ``setup.py``
 with ``test`` will also copy the compiled library into the source
-directory)::
+directory)
+
+.. code-block:: bash
 
     wget https://github.com/kvarq/kvarq/archive/master.zip
     unzip master.zip
@@ -88,13 +83,15 @@ the method of choice if you intend to plan :ref:`to modify the KvarQ source
 <hacking>` because you don't need to make a fresh installation after every
 change -- but don't forget to re-run ``python setup.py test`` in case you changed
 the C source code to make sure the compiled extension is copied into the correct
-directory (or by sourcing the script ``. ./activate``)::
+directory (or by sourcing the script ``. ./activate``)
+
+.. code-block:: bash
 
     PYTHONPATH=`pwd`; export PYTHONPATH
     alias kvarq='python -m kvarq.cli'
     kvarq -h
 
-In either way, you now have the ``kvarq`` command at your disposal and can
+In either way, you now have the KvarQ command at your disposal and can
 continue :ref:`using the commandline <using-cli>` or start the
 :ref:`graphical user interface <gui>`.
 
@@ -120,7 +117,9 @@ Prerequisites:
     **Command Line Tools for Xcode** from the "Developer Tools" category.
 
 From this point on, follow the steps outlined in the :ref:`Linux section
-<install-from-source-linux>`.
+<install-from-source-linux>`.  If you want to create an OS X application, you
+will also need to download and install `py2app
+<http://pythonhosted.org/py2app/>`_.
 
 
 .. _install-from-source-windows:

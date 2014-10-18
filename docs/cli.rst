@@ -15,7 +15,7 @@ Depending on which :ref:`installation instructions <installing>` you
 followed, the KvarQ command line utility will be accessible in a
 different way
 
-  - installation from source: simply enter ``kvarq`` on the command
+  - installation from source: simply enter KvarQ on the command
     line or alternatively call ``python -m kvarq.cli`` (make sure the
     directory containing ``kvarq/`` is in the ``PYTHONPATH`` if you
     just downloaded & compiled KvarQ without installing it)
@@ -23,8 +23,6 @@ different way
   - binary installation windows: go to the directory with the kvarq
     files and start ``kvarq.exe``
 
-..
-  does not work (anymore)
   - binary installation OS X: enter the following command in a
     shell: ``/path/to/kvarq.app/Contents/MacOS/python -m kvarq.cli``
 
@@ -34,9 +32,10 @@ are all described briefly if KvarQ is run with the ``--help`` command
 line switch.
 
 Note that most command line arguments apply to a specific **subcommand**, but
-some arguments (such as selection of :ref:`testsuites <testsuites>` using the
-``-t`` option or logging using the ``-d`` and ``-l`` options) apply to all
-commands and are therefore specified *before* the subcommand.
+some arguments (such as declaration of additional :ref:`testsuites
+<testsuites>` directories using the ``-t`` option or logging using the ``-d``
+and ``-l`` options) apply to all commands and are therefore specified *before*
+the subcommand.
 
 
 .. _loading-testsuites:
@@ -44,20 +43,115 @@ commands and are therefore specified *before* the subcommand.
 Loading of Testsuites
 ---------------------
 
-:ref:`Testsuites <testsuites>` can be loaded by three different mechanisms.
-These mechanisms can be used for the :ref:`GUI program <gui>` as well if it is
-started from the command line using the ``gui`` subcommand. Note that if
-a testsuite is specified more than one time, the last occurrence is used.
+Loading of :ref:`Testsuites <testsuites>` is a two step process:
+
+  1. First all available testsuites are **discovered**.  KvarQ
+     looks for testsuites in the following directories 
+
+     a) The directory ``testsuites/`` in the directorythat contains the
+        executable.  That is where the testsuites are originally located after
+        download.
+
+     b) In the directory ``kvarq_testsuites/`` in the user's home directory.
+
+     c) In the directory ``testsuites/`` in the current working directory
+
+     d) From directories specified with the environment variable
+        ``KVARQ_TESTSUITES`` -- use your system's path separator (``;`` on
+        windows, ``:`` on most other systems).
+
+     e) From any directories specified with the general ``--testsuite-directory``
+        (shorthand ``-t``) command line switch.
+
+     If a testsuite is found several times, the last occurrence is used.  This
+     allows for easy modification of existing testsuites: simply copy the files
+     into the directory ``./testsuites/`` and modify them.  Because discovery
+     takes place later on the current working directory, these modifications
+     will override the original testsuites.  This mechanism also easily allows
+     to have different versions of the same testsuite -- simply rename the
+     directory (e.g. copying ``MTBC/`` to ``MTBC-legacy/`` before applying any
+     incompatible changes to the testsuites).
+
+  2. Testsuites are later on loaded from this pool of discovered testsuites
+     when necessary.  When :ref:`scanning a .fastq file
+     <cli-scan-single-file>`, the testsuites have to be specified explicitly,
+     but for most other actions (such as :ref:`showing results
+     <cli-illustrate>`), testsuites are loaded automatically.
 
 
-  1. From the environment variable ``KVARQ_TESTSUITES`` that contains a colon
-     separated list of paths to :ref:`Testsuites`.
+.. _cli-scan-single-file:
 
-  2. From the directory ``testsuites/`` in the current working directory.
-     This directory can also contain symbolic links to :ref:`Testsuites`.
+Scanning a File
+---------------
 
-  3. Via the command line switch ``-t``. This switch can be specified any
-     number of times.
+The ``scan`` subcommand scans a ``.fastq`` file and saves the results
+in a ``.json`` file.  There are many additional parameters to this command.
+See the following examples to illustrate some scenarios.
+
+Simplest scenario: Scan a file, showing a progress bar during the scanning
+process and save the results (using the whole :ref:`MTBC testsuites
+<testsuites-MTBC>`)::
+
+    kvarq scan -l MTBC -p H37v_strain.fastq H37v_strain.json
+
+Being more verbose and copying the log output into a separate file::
+
+    kvarq -d -l kvarq.log scan -l MTBC -p H37v_strain.fastq H37v_strain.json
+
+In the following example, only the phylogenetic testsuite is loaded::
+
+    kvarq scan -l MTBC/phylo H37v_strain.fastq H37v_strain.json
+
+There are many more command line options; in the following example, KvarQ
+uses only one thread (this results in a much slower scanning, but would be
+advisable if many scans are executed in parallel as scheduled jobs),
+specifies explicitly the ``.fastq`` variant (normally this variant is guessed
+by peeking into the quality scores), and ignores all reads that are shorter
+than 30 base pairs (after quality trimming)::
+
+  kvarq scan -l MTBC -t 1 --variant Sanger -r 30 -p H37v_strain.fastq H37v_strain.json
+
+**During the scanning**, it is possible to obtain some additional statistics by
+pressing ``<CTRL-C>`` on the terminal (this does not work on Windows when you
+use a MinGW bash prompt). Pressing ``<CTRL-C>`` twice within two seconds will
+interrupt the scanning process and proceed to calculate the results with the
+data gathered so far.
+
+Usually, the default parameters for quality cut-off and minimum overlap (see
+:ref:`configuration-parameters`) work pretty well. If you encounter problems
+with a particular ``.fast`` file, refer to the example in
+:ref:`determine-scanning-parameters`.
+
+
+.. _cli-summarize:
+
+Extracting results from a batch of scans
+----------------------------------------
+
+Normally, you would run KvarQ over a whole series of ``.fastq`` files
+and then in the end extract the relevant information from the resulting
+``.json`` files.  The ``summarize`` command allows such an extraction
+of summary information from multiple ``.json`` files.  The following
+command extracts the results, as reported by the different testsuites,
+and saves it to a ``.csv`` file::
+
+  kvarq summarize results/*.json > results.csv
+
+
+.. _cli-info:
+
+Showing information about testsuites
+------------------------------------
+
+The ``info`` commands displays version information and some summary statistics
+about testsuites.  Testsuites can be specified the same way as when
+:ref:`scanning a file <cli-scan-single-file>`, so this command is handy to
+estimate how many templates would be loaded with a given testsuite
+selection.  Using the ``-L`` command line switch loads all discovered
+testsuites::
+
+  kvarq info -l MTBC
+  kvarq info -L
 
 
 Directly Analysing a .fastq
@@ -68,78 +162,6 @@ performing a scan of the file.  For example, the readlengths that would result
 from a specified quality cutoff can be displayed using::
 
     kvarq show -Q 13 H37v_scan.fastq
-
-
-.. _cli-scan-single-file:
-
-Scanning a Single File
-----------------------
-
-The ``scan`` subcommand scans a ``.fastq`` file and saves the results
-in a ``.json`` file.  There are many additional parameters to this command.
-See the following examples to illustrate some scenarios.
-
-Simplest scenario: Scan a file, showing a progress bar during the scanning
-process and save the results (using the MTBC :ref:`testsuites <testsuites>`)::
-
-    kvarq -t testsuites/MTBC/ scan -p H37v_strain.fastq H37v_strain.json
-
-Being more verbose and copying the log output into a separate file::
-
-    kvarq -t testsuites/MTBC/ -d -l kvarq.log scan -p H37v_strain.fastq H37v_strain.json
-
-In the following example, only the phylogenetic testsuite is loaded from
-the MTBC directory::
-
-    kvarq -t testsuites/MTBC/phylo.py scan H37v_strain.fastq H37v_strain.json
-
-**During the scanning**, it is possible to obtain some additional statistics by
-pressing ``<CTRL-C>`` on the terminal (this does not work on Windows when you
-use a MinGW bash prompt). Pressing ``<CTRL-C>`` twice within two seconds will
-interrupt the scanning process and proceed to calculate the results with the
-data gathered so far.
-
-Usually, the default parameters for quality cut-off and minimum overlap (see
-:ref:`configuration-parameters`) work pretty well. If you encounter problems
-with a particular ``.fast`` file, refer to the examples in
-:ref:`determine-scanning-parameters`.
-
-
-.. _cli-scan-batch-of-files:
-
-Scanning a Batch of Files
--------------------------
-
-The KvarQ source distribution comes with some utility scripts that allow to
-scan a whole batch of ``.fastq`` files with a single invocation from the
-command line. the names of the ``.fastq`` files are taken from a table (which
-can be in comma separated values format or alternatively in Microsoft Excel
-97/2000/XP/2003 for convenience).  The execution of the script
-``scripts/table_scan.py`` will try to find every ``.fastq`` file specified in
-the table, then run ``kvarq/cli.py`` and save the resulting ``.json`` files
-into the specified output directory (by default, testsuites are drawn from the
-directory ``./testsuites`` so you might want to set a symlink before starting
-the scan as in the following example)::
-
-    ln -s /usr/local/share/kvarq/testsuites/MTBC/ testsuites
-    python scripts/table_scan.py fastqs.xls results
-
-In the next example, the files in the list are only scanned for
-phylogenetic markers and resistance information and the number of threads is
-limited to four to save some processing power for the other users while all hit
-occurences are recorded for further analysis (the flags specified are exeactly
-the same as available for the :ref:`scan subcommand <cli-scan-single-file>`)::
-
-    ln -s /usr/local/share/kvarq/testsuites/MTBC/phy testsuites
-    python scripts/table_scan.py -f '-l kvarq.log -t testsuites/phylo.py -t testsuites/resistance.py scan -t 4 -H -p' fastqs.csv results/
-
-In a second step, the original table can be combined with the results of all
-the ``.json`` files (the following command will create a new file called
-``output/fastqs.xls`` that contains the original ``fastqs.xls`` as well
-as the result from the scans).  The script can easily be modified to include
-other data from the ``.json`` file than the default selection.::
-
-    python scripts/table_combine.py fastqs.xls results/
 
 
 .. _cli-illustrate:
@@ -154,9 +176,9 @@ The subcommand ``illustrate`` can be used to show the final results of
 the scanning, as well as detailed information about the coverages or
 a histogram of the (quality-cut) readlengths encountered::
 
-    kvarq -t testsuites/MTBC illustrate -C H37v_strain.json
-    kvarq -t testsuites/MTBC illustrate -r H37v_strain.json
-    kvarq -t testsuites/MTBC illustrate -l H37v_strain.json
+    kvarq illustrate -r H37v_strain.json
+    kvarq illustrate -c H37v_strain.json
+    kvarq illustrate -l H37v_strain.json
 
 
 .. _cli-update:
@@ -169,7 +191,7 @@ intermediare results (encoded in :py:class:`kvarq.analyse.Coverage`), it is
 possible to update the results sections after modifying the code without having
 to re-scan the ``.fastq`` file.  The ``.json`` file is updated in-place::
 
-    kvarq -t testsuites/MTBC -d update H37v_scan.json
+    kvarq -d update H37v_scan.json
 
 
 .. _cli-more-examples:
@@ -180,7 +202,9 @@ More Usage Examples
 Verify File Format Integrity
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Check all ``.fastq`` files in a directory structure for file format integrity::
+Check all ``.fastq`` files in a directory structure for file format integrity
+
+.. code-block:: bash
 
     #!/bin/bash
     for fastq in `find /tbresearch -name \*.fastq`; do

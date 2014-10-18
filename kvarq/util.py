@@ -4,8 +4,11 @@ from math import log
 import threading
 import os.path
 import json
+import csv
 import re
+import urlparse, urllib
 
+from kvarq import DOC_URL
 
 class ProgressBar(object):
 
@@ -123,8 +126,6 @@ class ProgressBar(object):
         return pt.ret
 
 
-
-
 class TextHist:
 
     ''' outputs a text histogram in the form of::
@@ -207,6 +208,43 @@ class TextHist:
 
         return ret
 
+def get_help_path(page='index', anchor=None, need_url=False):
+    ''' returns path/url to specified help page (without extension);
+        prioritizes : local html, local rst, online help '''
+
+    if anchor is None:
+        rst_suffix = ''
+        html_suffix = ''
+    else:
+        rst_suffix = ':' + anchor
+        html_suffix = '#' + anchor
+
+    # try compiled html help
+    if is_app() or is_exe():
+        path = os.path.join(sys.prefix, 'docs', '_build', 'html')
+    else:
+        path = get_root_path('docs', '_build', 'html')
+
+    if os.path.isdir(path):
+        path = os.path.abspath(os.path.join(path, page + '.html'))
+        if need_url:
+            return urlparse.urljoin('file:', urllib.pathname2url(path)
+                    + html_suffix)
+        else:
+            return path + html_suffix
+
+    # try source .rst help
+    path = get_root_path('docs')
+    if os.path.isdir(path):
+        path = os.path.abspath(os.path.join(path, page + '.rst'))
+        if need_url:
+            return urlparse.urljoin('file:', urllib.pathname2url(path))
+        else:
+            return path + rst_suffix
+
+    # fail with official url
+    return DOC_URL + '/' + page + '.html' + html_suffix
+
 def get_root_path(*parts):
     if is_exe():
         return os.path.join(sys.prefix, *parts)
@@ -276,7 +314,6 @@ class csv_xls_writer:
         self.fname = fname
 
         if fname.endswith('.csv'):
-            import csv
             self.csv = csv.writer(file(self.fname, 'w'))
             self.xls = None
 
@@ -284,7 +321,6 @@ class csv_xls_writer:
             try:
                 import xlwt
             except ImportError:
-                import csv
                 self.fname = self.fname[:-4] + '.csv'
                 self.csv = csv.writer(file(self.fname, 'w'))
                 self.xls = None
@@ -318,4 +354,55 @@ class csv_xls_writer:
     def flush(self):
         if self.csv: return
         self.wb.save(self.fname)
+
+
+class JsonSummary:
+    '''
+    reads in several .json files and dumps output table in .csv format
+    '''
+
+    def __init__(self):
+        self.data = {}
+        self.columns = ['filename', 'filesize', 'scantime']
+        self.colspan = dict(filename=1, filesize=1, scantime=1)
+
+    def add(self, fname):
+        '''
+        :param fname: name of .json file to parse
+        '''
+        d = json.load(file(fname))
+        self.data[fname] = {}
+        for k, v in d['analyses'].items():
+            self.data[fname][k] = v
+            if k not in self.columns:
+                self.columns.append(k)
+                self.colspan[k] = 1
+            if isinstance(v, (list, tuple)):
+                self.colspan[k] = max(self.colspan[k], len(v))
+        self.data[fname]['filename'] = fname
+        self.data[fname]['filesize'] = sum(d['info']['size'])
+        self.data[fname]['scantime'] = int(d['info']['scantime'])
+
+    def dump(self, fd=sys.stdout):
+        '''
+        writes summary information in .csv format
+        :param fd: file descriptor to write output to (defaults to stdout)
+        '''
+        out = csv.writer(fd)
+
+        row = []
+        for column in self.columns:
+            row += [column] * self.colspan[column]
+        out.writerow(row)
+
+        for fname in self.data:
+            row = []
+            for column in self.columns:
+                v = self.data[fname].get(column)
+                if isinstance(v, (list, tuple)):
+                    row += v + [None] * (self.colspan[column] - len(v))
+                else:
+                    row += [v] + [None] * (self.colspan[column] - 1)
+
+            out.writerow(row)
 

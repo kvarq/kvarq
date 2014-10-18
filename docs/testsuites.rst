@@ -5,19 +5,24 @@ KvarQ testsuites
 ================
 
 Testsuites define positions to scan for as well as how to interpret mutations.
-They have to be loaded (see :ref:`Loading Testsuites <loading-testsuites>` and
-the :ref:`GUI settings dialog <settings>`) prior to scanning but also to
-analyze ``.json`` data using the :ref:`explorer <explorer>`.  A ``.json`` file
-generated with a certain combination of testsuites can only be analyzed using
-the explorer if testsuites with the same version are used (this is because
-``.json`` files only contain the names of the SNPs but the location within
-genes is saved in the testsuites).
+They have to be loaded (see :ref:`Loading Testsuites <loading-testsuites>`)
+:ref:`selected prior to scanning <scanner>` but also to analyze ``.json`` data
+using the :ref:`explorer <explorer>`.  A ``.json`` file generated with
+a certain combination of testsuites can only be analyzed using the explorer if
+testsuites with the same version are used (this is because ``.json`` files only
+contain the names of the SNPs but the location within genes is saved in the
+testsuites).
 
-KvarQ testsuites can be grouped together in a directory.  These directories can
-again be grouped together.  See **for example** the ``testsuites/MTBC``
-testsuites that are included in the KvarQ source code (additional testsuites
-are linked in as submodules in the ``testsuites/`` directory in the source
-distribution or can be `downloaded from github <http://github.com/kvarq>`_):
+A KvarQ testsuite is a python source file that defines
+a :py:class:`kvarq.genes.Testsuite` with the same name as the python file.
+Several of these testsuites can be grouped together within a single directory.
+Any number of such directories containing testsuite python files can be stored
+in a well defined location from which it is then :ref:`discovered in particular
+order <loading-testsuites>`.
+
+For example, the testsuites ``spoligo``, ``resistance``, and ``phylo`` are
+grouped together in the directory ``MTBC/`` and can be found in the directory
+``testsuites/`` of KvarQ:
 
   - ``testsuites/MTBC/_util.py`` : every file that starts with an underscore
     will **not** be loaded from KvarQ when loading testsuites from a directory,
@@ -28,9 +33,6 @@ distribution or can be `downloaded from github <http://github.com/kvarq>`_):
   - ``testsuites/MTBC/resistance.py`` : tests for some common resistance
     mutations in MTBC
   - ``testsuites/MTBC/spoligo.py`` : *in silico* spoligo typing of MTBC
-  - ``testsuites/MTBC/legacy/`` : older versions of testsuites mentioned above;
-    use these to explore old data files (load same version with which the fastq
-    file was originally scanned)
 
 
 .. _roll-your-testsuite:
@@ -38,16 +40,11 @@ distribution or can be `downloaded from github <http://github.com/kvarq>`_):
 Rolling your own testsuite
 --------------------------
 
-KvarQ makes it very simple to write new testsuites.  Take as an example the
-file included below (can be found in the ``testsuites/`` directory of the
-:ref:`source distribution <install-from-source>`).  After having developed
-a testsuite and tested it on your data, please `send me a note
-<mailto:andreas.steiner@unibas.ch>`_ and I will include a link in the KvarQ
-distribution.  See :ref:`ebola14` for a tutorial on how to write a testsuite.
-
-.. literalinclude:: ../testsuites/MTBC/example.py
-  :language: python
-  :linenos:
+KvarQ makes it very simple to write new testsuites.  It is probably easiest to
+take a pre-existing testsuite and adapt it to your needs. All testsuites
+shipped with KvarQ are well annotated and there are some articles in the
+:ref:`tutorial section <tutorial>` that show how to adapt the testsuites
+in the ``testsuites/example/`` directory.
 
 
 .. _testsuites-compatibility:
@@ -72,4 +69,24 @@ The following problems can arise when different versions of testsuites are used
     Note that introductions of new tests are **not** backwards compatible because
     the new version of the testsuite will be looking for non-existing tests when
     loading data generated with an old version.
+
+
+.. _testsuites-example:
+
+Annotated example
+-----------------
+
+The following is a dump of the extensively annotated testsuite
+``testsuites/examples/example.py`` included with KvarQ
+
+.. literalinclude:: ../testsuites/examples/example.py
+  :language: python
+
+..
+  .. _testsuites-MTBC:
+  MTBC testsuite
+  --------------
+  .. _testsuites-examples:
+  examples testsuite
+  ------------------
 

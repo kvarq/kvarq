@@ -31,6 +31,10 @@ The right pane in the main window shows the log output that describes the
 general activity as well as useful additional information during the scanning
 process.  Important messages (warnings, errors) are highlighted in red.
 
+The two buttons on the left open the :ref:`scanner <scanner>` to scan
+``.fastq`` files and the :ref:`explorer <explorer>` to view results saved as
+``.json`` files from previous scans.
+
 
 .. _settings:
 
@@ -42,25 +46,10 @@ Configuring KvarQ
   :scale: 50 %
   :width: 706
 
-There are two steps to configure KvarQ:
-
-  1. Specify the :ref:`testsuites <testsuites>` that are known to the program.
-     These testsuites can be loaded from different places.  If a testsuite with
-     the same name already exists, it is replaced with the one specified last.
-
-     The :ref:`scanner <scanner>` as well as the :ref:`explorer <explorer>`
-     need to know these testsuites in order perform the scanning or correctly
-     display the results.  After loading testsuites, they appear in the list
-     (unless they were replacing another testsuite already listed).  From this
-     set of available testsuites, a **selection** can be made that specifies
-     which of the testsuites should be used during the scanning process.
-     Selecting more testsuites will slow down the scanning process and produce
-     larger, more informative files.
-
-  2. The :ref:`engine configuration parameters <configuration-parameters>` can
-     also be modified.  Usually, the default values work well, but in some
-     cases (such as old low-quality files) it can be advantageous to change
-     some of these values.
+The :ref:`engine configuration parameters <configuration-parameters>` can be
+modified in the settings window.  Usually, the default values work well, but in
+some cases (such as old low-quality files) it can be advantageous to change
+some of these values.
 
 
 .. _scanner:
@@ -71,6 +60,15 @@ The Scanner
 This simple window allows to scan a single or multiple ``.fastq`` files to
 generate ``.json`` files (depending on whether a single or multiple files
 are selected in the file selection dialog).
+
+.. image:: _static/imgs/screenshots/testsuite_selection.png
+  :align: center
+  :scale: 50 %
+  :width: 548
+
+When the selection of ``.json`` is done, the scanner shows a window with a list
+of :ref:`discovered testsuites <loading-testsuites>` that can be checked
+individually to be included during the scan of the ``.fastq`` files.
 
 .. image:: _static/imgs/screenshots/simple_scanning.png
   :align: center
@@ -144,10 +142,13 @@ The explorer is a simple Tk program consisting of different windows:
   Every item in the **lower pane** informs about the following test details:
 
     - Whether the test was "found positive" : a ``+`` sign in front of the test
-      name signifies that this test was positive. For a SNP this means that the
-      specified mutant allele was found and for a test covering a larger region
-      of the genome this signifies that there was at least one mutation
-      detected in the region of interest.
+      name signifies that this test was positive.  For a SNP this means that
+      the specified mutant allele was found and for a test covering a larger
+      region of the genome this signifies that there was at least one mutation
+      detected in the region of interest.  A ``~`` sign (not shown) in front of
+      the test name would mean that there were base calls with the most
+      dominant base below 90%, suggesting a :ref:`mixed colony
+      <clonal-variant>`.
 
     - Test name that describes the genotype.
 

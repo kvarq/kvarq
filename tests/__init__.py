@@ -1,3 +1,7 @@
+"""
+KvarQ test package
 
-from test_engine import *
+see also the python program :py:mod:`tests.test_gui`
+
+"""
 

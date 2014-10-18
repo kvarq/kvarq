@@ -64,6 +64,9 @@ def convert_legacy_data(testsuites, data):
         data['coverages'] = [(k, v) for k, v in coverages.items()]
         lo.debug('mapping "nseqhits", "nseqbasehits" : (%d) %s' % (len(nrmap), str(nrmap)))
         for key in ['nseqhits', 'nseqbasehits']:
+            if key not in data['stats']:
+                lo.info('no stats/%s found (old json version)' % key)
+                continue
             data['stats'][key] = [
                     data['stats'][key][nrmap[coveragenr]] 
                     for coveragenr in range(len(coverages)) # forward

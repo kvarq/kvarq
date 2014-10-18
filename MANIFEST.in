@@ -1,25 +1,19 @@
 
 include activate
 
-recursive-include testsuites *.py
-recursive-include testsuites *.bases
+include README.md
 
-include tests/*.py
-include tests/test_engine.fastq
-include tests/test_analyser.fastq
-
-include scripts/*.py
-
-recursive-include res *
-
-include docs/*.rst
-include docs/Makefile
-include docs/make.bat
-recursive-include docs/_templates *
-recursive-include docs/_static *
-recursive-include docs/_build/html *
-
-recursive-include win32/pthread *
+graft tests
+graft csrc
+graft res
+graft win32/pthread
+graft docs
+prune docs/_api
+prune docs/_build
+include testsuites/README.md
+graft testsuites/MTBC
+graft testsuites/examples
 
 global-exclude */.DS_Store
+global-exclude *.pyc .*.sw* .swp
 

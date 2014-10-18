@@ -12,11 +12,11 @@ import sys
 import re
 from distutils.version import StrictVersion
 
-''' defines which testsuites can be loaded by this version of KvarQ. whenever
+'''defines which testsuites can be loaded by this version of KvarQ. whenever
 new changes are introduced that break backwards-compatibility, the first number
 is increased by one. introduction of new features that retain compatibility
 with old testsuites will increase the second number by one'''
-COMPATIBILITY = '0.1'
+COMPATIBILITY = '0.2'
 
 
 class Genome:
@@ -34,7 +34,7 @@ class Genome:
         '''
         :param path: name of file to read bases from; can be ``.bases``
             file that directly contains base sequence (without any
-            whitespace) or a fiel in FASTA format
+            whitespace) or a file in FASTA format (only first genome is read)
         :param identifier: short identifier of genome; will be read from
             FASTA file if none specified
         :param description: text description; will also be read from
@@ -58,8 +58,12 @@ class Genome:
                     description = defline[idx + 1:]
 
             # read whole sequence into memory
+            self.bases = ''
             self.bases = ''.join([line.rstrip('\n\r')
                     for line in self.f.readlines()])
+            if '>' in self.bases:
+                lo.info('%s contains several genomes; only first read' % path)
+                self.bases = self.bases[:self.bases.index('>')]
             self.size = len(self.bases)
             self.f.close()
             lo.debug('read %d bytes FASTA sequence "%s" into memory' % (
@@ -107,7 +111,8 @@ class Gene:
     ''' defines a gene within a :py:class:`.Genome` '''
 
     def __init__(self, genome, identifier,
-            start, stop, promoter_end=None, plus_strand=True):
+            start, stop, promoter_end=None, plus_strand=True,
+            coding=True):
         '''
         :param genome: a :py:class:`.Genome`
         :param identifier: a short identifier of the gene
@@ -116,10 +121,14 @@ class Gene:
         :param promoter_end: position of the base after the last
             base of the the promoter (defaults to ``start``)
         :param plus_strand: whether the gene is read from the ``+`` strand
+        :param coding: whether the gene is coding (if set to ``False``, the
+            method :py:meth:`mut2str` will report base changes instead of
+            amino-acid changes
         '''
         self.genome = genome
         self.identifier = identifier
         self.plus_strand = plus_strand
+        self.coding = coding
         assert start<=stop, 'start position must be smaller than stop position'
         #assert (stop-start +1)%3 == 0, 'gene length must be multiple of 3'
         self.start = start
@@ -138,7 +147,10 @@ class Gene:
                 wildtype and Y the symbol for the mutant amino acid;
                 if the mutation is *before* the gene, ``'gene promoter mutation -X'``
                 is returned; if the mutation is *after* the gene, ``'?'`` is
-                returned '''
+                returned; if the gene is *not coding*, then a string in the
+                form 'posXY' is returned, where pos is the base position
+                relative to the beginning of the gene, X will be the original base,
+                and Y the new base '''
 
         if pos < self.promoter_end:
             return '%s promoter mutation %d' % (self.identifier, pos - self.promoter_end)
@@ -146,20 +158,27 @@ class Gene:
             return '?'
             #return '??? (%d not within %d-%d)'%( pos, self.start, self.stop)
 
+        pos1 = pos - self.start + 1
         codon_nr = (pos-self.start)/3 + 1
         codon_start = self.start+(codon_nr-1)*3
         codon_mut = pos-codon_start
         codon = self.genome.seq(codon_start, codon_start+2)
+        oldbase = self.genome.read(pos, 1)
 
         if not self.plus_strand:
+            pos1 = self.stop - pos + 1
             codon_nr = (self.stop-pos)/3 +1
             codon_mut = 2-codon_mut
             codon = codon.reverse()
             newbase = codon.pairs[newbase]
+            oldbase = codon.pairs[oldbase]
 
-        aa1 = codon.transcribe()
-        aa2 = codon.transcribe(mutations=((codon_mut, newbase),))
-        return self.identifier + '.' + aa1 + str(codon_nr) + aa2
+        if self.coding:
+            aa1 = codon.transcribe()
+            aa2 = codon.transcribe(mutations=((codon_mut, newbase),))
+            return self.identifier + '.' + aa1 + str(codon_nr) + aa2
+        else:
+            return self.identifier + '.' + str(pos1) + oldbase + newbase
 
     def __str__(self):
         ''' :returns: a string representation of the gene '''
@@ -471,7 +490,8 @@ class SNP(TemplateFromGenome):
         self.orig = orig
         oldbase = self.genome.read(pos, 1)
         if not force:
-            if orig: assert oldbase == self.orig
+            if orig: assert oldbase == self.orig, \
+                    'expected orig %s found %s' % (self.orig, oldbase)
             assert base != oldbase
         self.identifier = 'SNP%d%s%s'%(pos,oldbase,base)
 
@@ -542,9 +562,10 @@ class Testsuite(object):
     '''
     interpretes features from a ``.fastq`` file using an array of :py:class:`.Test`
 
-    this is a generic (abstract) implementation and testsuites should overwrite
-    its :py:meth:`._analyse` method
-    manner.
+    this is a generic implementation that simply shows whether specified SNPs
+    have occurred and whether there were any mutations found in the regions.
+    subclassing testsuites its :py:meth:`._analyse` method in an application
+    specific manner.
     '''
 
     def __init__(self, tests, version):
@@ -598,6 +619,8 @@ class Testsuite(object):
         No exception is risen if the analyser defines additional tests that
         were defined by a previous testsuite but are no longer needed by the
         current testsuite.
+
+        .. automethod:: _analyse
         '''
         try:
             coverages = dict([(test, analyser[test]) for test in self.tests])
@@ -637,9 +660,9 @@ def load_testsuite(fname):
         sys.path.insert(0, os.path.dirname(fname))
         execfile(fname, namespace)
         del sys.path[0]
-    except Exception, e:
+    except Exception as e:
         raise TestsuiteLoadingException('exception while reading file : %s [%s]' % (
-            e, format_traceback(sys.exc_info())))
+            str(e), format_traceback(sys.exc_info())))
 
     if not 'GENES_COMPATIBILITY' in namespace:
         raise TestsuiteLoadingException('module defines no "GENES_COMPATIBILITY"')
@@ -657,5 +680,5 @@ def load_testsuite(fname):
         raise TestsuiteLoadingException('modules defines "%s" but is of type %s' %
                 type(namespace[name]))
 
-    return name, namespace[name]
+    return namespace[name]
 

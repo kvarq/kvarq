@@ -1,13 +1,14 @@
 
 from kvarq import DOWNLOAD_URL
 from kvarq.log import lo, set_debug
-from kvarq.analyse import Analyser, DecodingException, AnalyserJson
+from kvarq.analyse import Analyser, DecodingException
 from kvarq.analyse import VersionConflictException, TestsuiteVersionConflictException
-from kvarq.util import get_root_path, csv_xls_writer
+from kvarq.util import get_root_path, JsonSummary
 from kvarq.gui.util import open_help, ThemedTk, BackgroundJob, askopenfilename
 from kvarq.gui.tkplot import CoverageWindow, ReadlengthWindow, HitHistogramWindow, \
         MeanCoverageWindow, SpoligoWindow
 from kvarq.genes import SNP, TemplateFromGenome
+from kvarq.testsuites import update_testsuites
 
 import Tkinter as tk, tkMessageBox, tkFileDialog
 import tkFont
@@ -20,15 +21,17 @@ import sys
 
 class DirectoryExplorer:
 
-    def __init__(self, dname, testsuites):
+    def __init__(self, dname, testsuites, testsuite_paths):
 
         self.testsuites = testsuites
+        self.testsuite_paths = testsuite_paths
 
         if dname:
             self.dname = os.path.abspath(dname)
             self.jpaths = glob.glob(os.path.join(self.dname, '*.json'))
         else:
             jpaths = askopenfilename(
+                    initialdir=os.getcwd(),
                     title='Choose .json files to explore',
                     multiple=True,
                     filetypes=[('json files', '*.json')])
@@ -69,9 +72,8 @@ class DirectoryExplorer:
         self.jlist.bind("<Return>", self.open_json)
 
         # convert .xls button
-        self.convert = tk.Button(self.win, text='export data...', command=self.export)
+        self.convert = tk.Button(self.win, text='summarize...', command=self.summarize)
         self.convert.grid(row=2, column=0, sticky='ew')
-
 
         self.update()
 
@@ -99,7 +101,7 @@ class DirectoryExplorer:
 
     def do_open_json(self, jpath):
         try:
-            je = JsonExplorer(jpath, self.testsuites)
+            je = JsonExplorer(jpath, self.testsuites, self.testsuite_paths)
         except DecodingException, e:
             more = ''
             if isinstance(e, TestsuiteVersionConflictException):
@@ -120,27 +122,24 @@ class DirectoryExplorer:
 #                    'unexpected error',
 #                    'cannot load file %s : %s'%(jpath, e))
 
-    def export(self, x=None):
+    def summarize(self, x=None):
 
-        fname = os.path.join(self.dname,  csv_xls_writer.add_extension('json_results'))
-        if os.path.exists(fname):
-            tkMessageBox.showerror(title='file exists already',
-                    message='the file '+fname+' exists already; please rename '
-                    'or remove the file before generating a new export file')
-            return
+        fname = os.path.join(self.dname,  'results.csv')
+        i = 2
+        while os.path.exists(fname):
+            fname = os.path.join(self.dname,  'results%d.csv' % i)
+            i += 1
 
         bj = BackgroundJob('exporting data...')
 
         self.convert.config(state='disabled')
         text = self.convert.config('text')[4]
-        bj.data = { 'row' : 1 }
+        stats = dict(n=0)
 
         def do_export():
 
-            cxw = csv_xls_writer(fname, sheet_name='.json results')
+            js = JsonSummary()
 
-            analyses = []
-            rows = []
             for jpath in self.jpaths:
 
                 if bj.canceled:
@@ -149,27 +148,16 @@ class DirectoryExplorer:
                 bj.message = 'extracting from ' + os.path.basename(jpath)
 
                 try:
-                    json = AnalyserJson(jpath)
-                except DecodingException, e:
+                    js.add(jpath)
+                    stats['n'] += 1
+                except Exception as e:
                     lo.error('could not load %s : %s'%(jpath, e))
                     continue
 
-                row = [os.path.basename(jpath)] + [''] * len(analyses)
-                for analyse, result in json.analyses:
-                    if analyse in analyses:
-                        row[1 + analyses.index(analyse)] = str(result)
-                    else:
-                        analyses.append(analyse)
-                        row.append(str(result))
-
-                rows.append(row)
-                bj.data['row'] += 1
-
-            cxw.writerow(['.json'] + analyses)
-            for row in rows:
-                cxw.writerow(row + [''] * (len(analyses) + 1 - len(row)))
-            cxw.flush()
-            del cxw
+            try:
+                js.dump(file(fname, 'w'))
+            except IOError as e:
+                lo.error('could not write to file %s : %s' % (fname, e))
 
         def export_done():
 
@@ -178,7 +166,7 @@ class DirectoryExplorer:
 
             tkMessageBox.showinfo(title='created .xls',
                     message='successfully extracted informations from %d .jsons '
-                            'and saved to %s'%(bj.data['row'] - 1, fname))
+                            'and saved to %s'%(stats['n'], fname))
 
         bj.start(do_export, export_done)
 
@@ -194,7 +182,7 @@ class JsonExplorer:
     #   - resistances
     #     - analyse : (non) synonymous
 
-    def __init__(self, jpath_or_analyser, testsuites):
+    def __init__(self, jpath_or_analyser, testsuites, testsuite_paths):
         self.win = ThemedTk(title='json explorer', esc_closes=True,
                 geometry=(-200, -200))
 
@@ -212,8 +200,12 @@ class JsonExplorer:
             name = os.path.basename(self.analyser.fastq.fname)
         else:
             try:
+
+                data = json.load(file(jpath_or_analyser))
+                update_testsuites(testsuites, data['info']['testsuites'], testsuite_paths)
+
                 self.analyser = Analyser()
-                self.analyser.decode(testsuites, json.load(file(jpath_or_analyser)))
+                self.analyser.decode(testsuites, data)
                 self.analyser.update_testsuites()
             except Exception, e:
                 exc_info = sys.exc_info()
@@ -264,11 +256,12 @@ class JsonExplorer:
         self.alist.focus_set()
 
         self.after_id = None
-        def close_win():
+        def close_win(a=None):
             if self.after_id:
                 self.win.after_cancel(self.after_id)
             self.win.destroy()
         self.win.close = close_win
+        self.win.protocol('WM_DELETE_WINDOW', close_win)
         self.poll()
 
     def show_analyses(self, x):
@@ -383,12 +376,14 @@ class JsonExplorer:
             mean = coverage.mean(include_margins=False)
 
             sign = ''
+            if coverage.mixed():
+                sign += '~'
             if isinstance(test.template, TemplateFromGenome) and \
                     not isinstance(test.template, SNP):
-                sign = '+' * len(test.template.mutations(coverage))
+                sign += '+' * len(test.template.mutations(coverage))
             else:
                 if test.template.validate(coverage):
-                    sign = '+'
+                    sign += '+'
 
             hits = ''
             if 'nseqhits' in self.analyser.stats:

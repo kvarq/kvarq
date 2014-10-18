@@ -7,7 +7,19 @@ Changelog
 version 0.12.2
 ~~~~~~~~~~~~~~
 
-  - added support for more ``.fastq.gz`` formats
+  - new ``examples/`` testsuites and :ref:`tutorials <tutorial>`, leading to
+    development of new testsuites ebola-sierraleone14_ and MTBC-SNP-barcodes_
+  - new :ref:`testsuite discovering/loading <testsuite-loading>` mechanism
+  - easier selection of testsuites via :ref:`GUI <scanner>`
+  - better support for :ref:`clonal variants <clonal-variants>`
+  - ``MTBC/resistance`` scans ``pncA`` gene; mutations in ``rrsS`` and
+    ``rrsK`` (ribosomal RNA) are labeled correctly
+  - :ref:`summarize <cli-summarize>` command
+  - added support for more ``.fastq.gz`` formats, including paired files
+  - increased test coverage
+
+.. _ebola-sierraleone14: https://github.com/kvarq/kvarq-ebola-sierraleone14/archive/master.zip
+.. _MTBC-SNP-barcodes: https://github.com/kvarq/kvarq-MTBC-SNP-barcodes/
 
 version 0.12.1
 ~~~~~~~~~~~~~~

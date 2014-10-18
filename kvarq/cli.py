@@ -6,10 +6,11 @@ from kvarq import VERSION
 from kvarq import genes
 from kvarq import engine
 from kvarq import analyse
-from kvarq.util import ProgressBar, TextHist, json_dump
+from kvarq.util import ProgressBar, TextHist, json_dump, JsonSummary, get_help_path
 from kvarq.fastq import Fastq, FastqFileFormatException
 from kvarq.log import lo, appendlog, set_debug, set_warning, format_traceback
 from kvarq.config import default_config
+from kvarq.testsuites import discover_testsuites, load_testsuites, update_testsuites
 
 import argparse
 import sys
@@ -23,7 +24,7 @@ import glob
 
 ERROR_COMMAND_LINE_SWITCH = -1
 ERROR_FASTQ_FORMAT_ERROR = -2
-ERROR_JSON_EXISTS = -3
+ERROR_FILE_EXISTS = -3
 
 # utils {{{1
 
@@ -33,7 +34,7 @@ def traceit(type, value, tb):
     else:
         import traceback, pdb
         traceback.print_exception(type, value, tb)
-        print
+        print()
         pdb.post_mortem(tb)
 
 def heardEnter():
@@ -53,12 +54,23 @@ def heardEnter():
 
 # scan {{{1
 
-def scan(args, testsuites):
+def scan(args):
+
+    testsuite_paths = discover_testsuites(args.testsuite_directory or [])
+    if args.select_all:
+        testsuites = load_testsuites(testsuite_paths, testsuite_paths.keys())
+    else:
+        testsuites = load_testsuites(testsuite_paths, args.select)
+
+    if not testsuites:
+        sys.stderr.write('\n*** you must specify at least one testsuite! ***\n\n')
+        sys.stderr.write('(use the -t command line switch)\n\n')
+        sys.exit(ERROR_COMMAND_LINE_SWITCH)
 
     # prepare scanning {{{2
 
     try:
-        fastq = Fastq(args.fastq, paired=not args.no_paired)
+        fastq = Fastq(args.fastq, paired=not args.no_paired, variant=args.variant)
     except FastqFileFormatException, e:
         lo.error('cannot open file %s : %s'%(args.fastq, str(e)))
         sys.exit(ERROR_FASTQ_FORMAT_ERROR)
@@ -74,9 +86,13 @@ def scan(args, testsuites):
 
     analyser = analyse.Analyser()
 
-    if not args.force and os.path.exists(args.json):
-        lo.error('will not overwrite file ' + args.json)
-        sys.exit(ERROR_JSON_EXISTS)
+    if not args.force:
+        if os.path.exists(args.json):
+            lo.error('will not overwrite file ' + args.json)
+            sys.exit(ERROR_FILE_EXISTS)
+        if args.extract_hits and os.path.exists(args.extract_hits):
+            lo.error('will not overwrite file ' + args.extract_hits)
+            sys.exit(ERROR_FILE_EXISTS)
 
     # do scanning {{{2
 
@@ -98,6 +114,7 @@ def scan(args, testsuites):
 
         def run(self):
             try:
+                self.analyser.spacing = args.spacing
                 self.analyser.scan(fastq, testsuites, do_reverse=not args.no_reverse)
                 self.finished = True
             except Exception, e:
@@ -111,7 +128,7 @@ def scan(args, testsuites):
     pb.start()
 
     # scan / stats loop {{{3
-    print >> sys.stderr, '\n'
+    sys.stderr.write('\n')
     sigints = 0
     sigintt = time.time()
     while not at.finished and at.exception is None:
@@ -122,7 +139,7 @@ def scan(args, testsuites):
 
         if args.progress:
             pb.update(stats['progress'])
-            print >> sys.stderr, str(pb),
+            sys.stderr.write(str(pb))
 
 #        if args.coverage:
 #            means = sorted([n/len(analyser[i])
@@ -140,18 +157,19 @@ def scan(args, testsuites):
 
             # 2nd time : cancel scanning
             if time.time() - sigintt < 2.:
-                print >> sys.stderr, '\n\n*** caught multiple <CTRL-C> within 2s : abort scanning ***'
+                sys.stderr.write('\n\n*** caught multiple <CTRL-C> '
+                        'within 2s : abort scanning ***')
                 engine.stop()
                 at.join()
                 break
 
-            print
-            print TextHist(title='readlengths').draw(stats['readlengths'], indexed=True)
+            print()
+            print(TextHist(title='readlengths').draw(stats['readlengths'], indexed=True))
 
             means = sorted([n/len(analyser[i])
                     for i, n in enumerate(stats['nseqbasehits'])])
-            print
-            print TextHist(title='mean coverages').draw(sorted(means), indexed=False)
+            print()
+            print(TextHist(title='mean coverages').draw(sorted(means), indexed=False))
 
             sigints = stats['sigints']
             sigintt = time.time()
@@ -161,7 +179,7 @@ def scan(args, testsuites):
         lo.error('could not scan %s : %s [%s]'%(args.fastq, str(at.exception), at.traceback))
         sys.exit(ERROR_FASTQ_FORMAT_ERROR)
 
-    print >> sys.stderr
+    sys.stderr.write('\n')
     mbp = '%smb'% (stats['parsed']/1024**2)
     mbt = '%smb'% (stats['total' ]/1024**2)
     lo.info('performed scanning of %.2f%% (%s/%s, %d records) in %.3f seconds'% (
@@ -173,6 +191,9 @@ def scan(args, testsuites):
     data = analyser.encode(hits=args.hits)
     j = codecs.open(args.json, 'w', 'utf-8')
     json_dump(data, j)
+
+    if args.extract_hits:
+        at.analyser.extract_hits(args.extract_hits)
 
 
 # show {{{1
@@ -191,24 +212,27 @@ def show(args):
         rls = fastq.lengths(Amin, n=n, points=points)
 
         hist = TextHist()
-        print hist.draw(sorted(rls))
+        print(hist.draw(sorted(rls)))
 
     if args.info:
-        print 'dQ=' + str(fastq.dQ)
-        print 'variants=' + str(fastq.variants)
-        print 'readlength=' + str(fastq.readlength)
-        print 'records_approx=' + str(fastq.records_approx or '?')
+        print('dQ=' + str(fastq.dQ))
+        print('variants=' + str(fastq.variants))
+        print('readlength=' + str(fastq.readlength))
+        print('records_approx=' + str(fastq.records_approx or '?'))
 
 
 # update {{{1
 
-def update(args, testsuites):
+def update(args):
 
     if args.fastq:
         lo.warning('re-reading of hits not currently implemented')
 
-    f = open(args.json)
-    data = json.load(f)
+    data = json.load(file(args.json))
+
+    testsuite_paths = discover_testsuites(args.testsuite_directory or [])
+    testsuites = {}
+    update_testsuites(testsuites, data['info']['testsuites'], testsuite_paths)
 
     analyser = analyse.Analyser()
     analyser.decode(testsuites, data)
@@ -217,16 +241,35 @@ def update(args, testsuites):
     # save results back to .json
     data = analyser.encode(hits = analyser.hits is not None)
     j = codecs.open(args.json, 'w', 'utf-8')
+    lo.info('re-wrote results to file ' + args.json)
     json.dump(data, j, indent=2)
+
+
+# summarize {{{1
+
+def summarize(args):
+
+    js = JsonSummary()
+    for fname in args.json:
+        lo.info('processing ' + fname)
+        js.add(fname)
+
+    js.dump()
 
 
 # illustrate {{{1
 
-def illustrate(args, testsuites):
+def illustrate(args):
+
+    data = json.load(file(args.file))
+
+    testsuite_paths = discover_testsuites(args.testsuite_directory or [])
+    testsuites = {}
+    update_testsuites(testsuites, data['info']['testsuites'], testsuite_paths)
 
     analyser = analyse.Analyser()
     lo.info('loading json-file args.file')
-    analyser.decode(testsuites, json.load(file(args.file)))
+    analyser.decode(testsuites, data)
     lo.info('updating testsuites')
     analyser.update_testsuites()
 
@@ -234,58 +277,85 @@ def illustrate(args, testsuites):
         rls = analyser.stats['readlengths']
 
         hist = TextHist()
-        print hist.draw(rls, indexed=True)
+        print(hist.draw(rls, indexed=True))
 
     if args.coverage:
         for name, testsuite in analyser.testsuites.items():
-            print name + ':'
+            print(name + ':')
             for test in testsuite.tests:
-                print '  - %s : %s' % (test, analyser[test])
-            print
+                print('  - %s : %s' % (test, analyser[test]))
+            print()
 
     if args.results:
         for testsuite, results in analyser.results.items():
-            print '\n'+testsuite
-            print '-'*len(testsuite)
+            print('\n'+testsuite)
+            print('-'*len(testsuite))
             pprint(results)
 
 
 # version {{{1
 
-def version(args, testsuites):
-    print VERSION
+def version(args):
+    print(VERSION)
 
 
 # gui {{{1
 
-def gui(args, testsuites):
+def gui(args):
+
+    testsuite_paths = discover_testsuites(args.testsuite_directory or [])
+
     # only import Tkinter etc now
     import Tkinter
     from kvarq.gui.main import MainGUI
-    MainGUI(testsuites=testsuites)
+    MainGUI(testsuite_paths=testsuite_paths)
     Tkinter.mainloop()
 
 
 
 # info {{{1
 
-def info(args, testsuites):
-    print 'version=' + VERSION
-    print 'testsuites=' + ','.join([
-            '%s-%s' % (name, testsuite.version)
-            for name, testsuite in testsuites.items()])
-    print 'sys.prefix=' + sys.prefix
+def info(args):
+
+    testsuite_paths = discover_testsuites(args.testsuite_directory or [])
+    if args.select_all:
+        testsuites = load_testsuites(testsuite_paths, testsuite_paths.keys())
+    else:
+        testsuites = load_testsuites(testsuite_paths, args.select or [])
+
+    print('version=' + VERSION)
+    testsuites_descr = []
+    tbp = tests = 0
+    for name, testsuite in testsuites.items():
+        bp = 0
+        for test in testsuite.tests:
+            if isinstance(test.template, genes.DynamicTemplate):
+                bp += len(test.template.seq(spacing=args.spacing))
+            else:
+                bp += len(test.template.seq())
+        testsuites_descr.append('%s-%s[%d:%dbp]' % (
+            name, testsuite.version, len(testsuite.tests), bp))
+        tbp += bp
+        tests += len(testsuite.tests)
+    print('testsuites=' + ','.join(testsuites_descr))
+    print('sum=%d tests,%dbp' % (tests, tbp))
+    print('sys.prefix=' + sys.prefix)
 
 
 # explorer {{{1
 
-def explorer(args, testsuites):
+def explorer(args):
+
+    testsuite_paths = discover_testsuites(args.testsuite_directory or [])
+
     import Tkinter as tk
     from kvarq.gui.explorer import DirectoryExplorer, JsonExplorer
     if os.path.isdir(args.explorable):
-        DirectoryExplorer(args.explorable, testsuites=testsuites)
+        DirectoryExplorer(args.explorable,
+                testsuites={}, testsuite_paths=testsuite_paths)
     else:
-        JsonExplorer(args.explorable, testsuites=testsuites)
+        JsonExplorer(args.explorable,
+                testsuites={}, testsuite_paths=testsuite_paths)
     tk.mainloop()
 
 
@@ -295,9 +365,9 @@ parser = argparse.ArgumentParser(description='''
 
         analyse .fastq file and report specific mutations in a .json file;
         additional output is displayed on stdout and log information is printed
-        on stderr
+        on stderr -- for additional see %s
 
-    ''')
+    ''' % get_help_path())
 
 subparsers = parser.add_subparsers(help='main command to execute')
 
@@ -309,8 +379,8 @@ parser.add_argument('-x', '--excepthook', action='store_true',
         help='catch exception and launch debugger')
 parser.add_argument('-l', '--log',
         help='append log to specified file (similar to redirecting stderr, but without progress bar)')
-parser.add_argument('-t', '--testsuites', action='append',
-        help='load additional testsuites from specified files/directory (can be specified several times). all python files in specified directory not beginning with `_\' are loaded. filenames can contain version information after a `-\'. testsuites replace testsuites with same name specified in preceeding command line arguments. COMPULSORY switch for some commands (scan, update, illustrate, explorer). default is read from colon separated environment variable KVARQ_TESTSUITES')
+parser.add_argument('-t', '--testsuite-directory', action='append',
+        help='specify a directory that contains subdirectories from which testsuites can be loaded; these are added to the pool of testsuites that can later be selected (scan, info) or that are autoloaded (illustrate, explore, update)')
 
 # version {{{2
 parser_version = subparsers.add_parser('version',
@@ -329,6 +399,13 @@ parser_scan.add_argument('-p', '--progress', action='store_true',
 parser_scan.add_argument('-S', '--no-scan', action='store_true',
         help='instead of scanning the original file, the provided .json file from a previous scan result is used and the .json structures are re-calculated from the hit-list (see --hits); can only be done if version matches and same test suit is used (see --testsuites)')
 
+# select testsuites
+parser_scan.add_argument('-L', '--select-all', action='store_true',
+        help='load all discovered testsuites')
+parser_scan.add_argument('-l', '--select', action='append',
+        help='this parameter works the same way as the environment variable KVARQ_TESTSUITES : it is either the name of a testsuite (such as "MTBC/phylo"), or the name of a group of testsuites (such as "MTBC") that is located in one of the auto-discovered places (kvarq root directory, user directory, current working directory) -- or the path to a python file containing a testsuite (such as "~/my_testsuite.py")')
+
+
 # scan config
 parser_scan.add_argument('-t', '--threads', action='store', type=int,
         default=default_config['threads'],
@@ -345,6 +422,9 @@ parser_scan.add_argument('-r', '--readlength', action='store', type=int,
 parser_scan.add_argument('-o', '--overlap', action='store', type=int,
         default=default_config['minimum overlap'],
         help='minimum read overlap (default=%d)' % default_config['minimum overlap'])
+parser_scan.add_argument('-s', '--spacing', action='store', type=int,
+        default=default_config['spacing'],
+        help='default flank length on both sides of templates generated from genome (default=%d)' % default_config['spacing'])
 #parser_scan.add_argument('-c', '--coverage', type=int,
 #        default=default_config['stop median coverage'],
 #        help='stop scanning when median coverage (including margins) is above specified value (default=%d) -- specify 0 to force scanning of entire file' % default_config['stop median coverage'])
@@ -352,12 +432,16 @@ parser_scan.add_argument('-1', '--no-reverse', action='store_true',
         help='do not scan for hits in reverse strand')
 parser_scan.add_argument('-P', '--no-paired', action='store_true',
         help='ignore paired file -- by default, the file "strain_2.fastq[.gz]" is also read if "strain_1.fastq[.gz]" is specified on the command line')
+parser_scan.add_argument('--variant', choices=Fastq.vendor_variants.keys(),
+        help='specify .fastq variant manually in case heuristic determination fails')
 
-# output .json
+# output
 parser_scan.add_argument('-f', '--force', action='store_true',
         help='overwrite any existing .json file')
 parser_scan.add_argument('-H', '--hits', action='store_true',
         help='saves all hits in .json file; this way scan result can be re-used without (see --no-scan)')
+parser_scan.add_argument('-x', '--extract_hits',
+        help='stores the fastq records of all hits in specified file')
 
 # main arguments
 parser_scan.add_argument('fastq',
@@ -394,6 +478,14 @@ parser_show.add_argument('file',
         help='name of .fastq file to analyze')
 
 
+# summarize {{{2
+parser_summarize = subparsers.add_parser('summarize',
+        help='reads several .json files as generated by the "scan" command and summarizes the results to standard output in .csv format')
+parser_summarize.set_defaults(func=summarize)
+
+parser_summarize.add_argument('json', nargs='+',
+        help='input .json files')
+
 # illustrate {{{2
 parser_illustrate = subparsers.add_parser('illustrate',
         help='illustrate some information contained in a .json file (previously generated using the "scan" command)')
@@ -419,6 +511,14 @@ parser_gui.set_defaults(func=gui)
 # info {{{2
 parser_info = subparsers.add_parser('info',
         help='show infos about kvarq')
+parser_info.add_argument('-L', '--select-all', action='store_true',
+        help='load all discovered testsuites')
+parser_info.add_argument('-l', '--select', action='append',
+        help='this parameter works the same way as the environment variable KVARQ_TESTSUITES : it is either the name of a testsuite (such as "MTBC/phylo"), or the name of a group of testsuites (such as "MTBC") that is located in one of the auto-discovered places (kvarq root directory, user directory, current working directory) or the path to a python file containing a testsuite')
+
+parser_info.add_argument('-s', '--spacing', action='store', type=int,
+        default=default_config['spacing'],
+        help='default flank length on both sides of templates generated from genome (default=%d)' % default_config['spacing'])
 parser_info.set_defaults(func=info)
 
 # explorer {{{2
@@ -431,7 +531,9 @@ parser_explorer.set_defaults(func=explorer)
 
 # __main__ {{{1
 
-def main(argv):
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
     args = parser.parse_args(argv)
 
     assert not (args.debug and args.quiet), \
@@ -446,56 +548,7 @@ def main(argv):
     if args.excepthook:
         sys.excepthook = traceit
 
-    testsuites = dict()
-    testsuites_paths = list()
-
-    if 'KVARQ_TESTSUITES' in os.environ:
-        testsuites_paths += os.environ['KVARQ_TESTSUITES'].split(':')
-    if os.path.isdir('testsuites'):
-        testsuites_paths += [path for path in [os.path.join('testsuites', fname)
-                        for fname in os.listdir('testsuites')
-                        if fname[0] != '_']
-                if os.path.isdir(path) or path[-3:] == '.py']
-    if args.testsuites:
-        testsuites_paths += args.testsuites
-
-    if testsuites_paths:
-        for path in testsuites_paths:
-            if os.path.isdir(path):
-                fnames = [fname for fname in glob.glob(os.path.join(path, '*.py'))
-                        if not os.path.basename(fname)[0] == '_']
-            else:
-                fnames = [path]
-
-            for fname in fnames:
-                try:
-                    name, testsuite = genes.load_testsuite(fname)
-                    if name in testsuites:
-                        lo.info('replaced testsuite "%s" v%s -> v%s from "%s"' %
-                                (name, testsuites[name].version, testsuite.version, fname))
-                    else:
-                        lo.info('loaded testsuite "%s" from "%s"' % (name, fname))
-
-                    testsuites[name] = testsuite
-
-                except genes.TestsuiteLoadingException, e:
-                    lo.error('could not load testsuite from "%s" : %s' % (fname, e))
-
-    if args.func in [scan, update, illustrate, explorer]:
-        # MUST have testsuite
-        if not testsuites:
-            sys.stderr.write('\n*** you must specify at least one testsuite! ***\n\n')
-            sys.stderr.write('(use the -t command line switch)\n\n')
-            sys.exit(ERROR_COMMAND_LINE_SWITCH)
-        args.func(args, testsuites=testsuites)
-
-    elif args.func in [info, gui]:
-        # CAN have testsuite
-        args.func(args, testsuites=testsuites)
-
-    else:
-        # NEVER has testsuite
-        args.func(args)
+    args.func(args)
 
 
 if __name__ == "__main__":

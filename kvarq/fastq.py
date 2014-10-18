@@ -2,6 +2,7 @@
 import math
 import gzip
 import os.path
+import collections
 
 from kvarq.log import lo, tictoc
 
@@ -40,15 +41,18 @@ class Fastq:
     ASCII = '!"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ' + \
             '[\]^_`abcdefghijklmnopqrstuvwxyz{|}~'
 
-    vendor_variants = (
-            ('Sanger', range(0, 50), 0),
-            ('Solexa', range(-5, 41), 31),
-            ('Illumina 1.3+', range(0, 41), 31),
-            ('Illumina 1.5+', range(3, 42), 31),
-            ('Illumina 1.8+', range(0, 42), 0)
-        )
+    VendorProperties = collections.namedtuple(
+            'VendorProperties', ['Qrange', 'dQ'])
 
-    def __init__(self, fname, variant=None, fd=None, paired=False):
+    vendor_variants = dict((
+            ('Sanger', VendorProperties(range(0, 50), 0)),
+            ('Solexa', VendorProperties(range(-5, 41), 31)),
+            ('Illumina 1.3+', VendorProperties(range(0, 41), 31)),
+            ('Illumina 1.5+', VendorProperties(range(3, 42), 31)),
+            ('Illumina 1.8+', VendorProperties(range(0, 62), 0))
+        ))
+
+    def __init__(self, fname, variant=None, fd=None, paired=False, quiet=False):
         '''
         open ``.fastq`` or ``.fastq.gz`` file and determine its
         variant (setting attribute ``.Azero`` accordingly)
@@ -93,39 +97,46 @@ class Fastq:
                     lo.info('including paired file "%s"' % fname2)
                     self.fname2 = fname2
 
+        if sum(self.filesizes()) == 0:
+            raise FastqFileFormatException('cannot scan empty file')
+
         # scan some records
         min_pos, max_pos = self.min_max_score_check_file()
         lo.debug('min_pos=%d max_pos=%d' % (min_pos, max_pos))
 
-        # create list of variants compatible with PHRED scores
-        self.variants = []
-        self.dQ = None
-        for vendor_variant in self.vendor_variants:
-
-            name, pos_range, dQ = vendor_variant
-
-            if (min_pos - dQ) in pos_range and (max_pos - dQ) in pos_range:
-                if self.dQ is None:
-                    self.dQ = dQ
-                self.variants.append(name)
-
-                if variant is None and self.dQ != dQ:
-                    raise FastqFileFormatException(
-                            'PHRED scores are ambiguous : ' + str(self.variants))
-                lo.debug('compatible with ' + name)
-
-        # specified variant overrides/chooses
-        if variant is not None:
-            if not variant in self.variants:
-                raise FastqFileFormatException(
-                        'specified variant "%s" is not compatible with file'
-                        ' (valid variants are : %s' % (variant, self.variants))
-            self.variants = [variant]
-
-        if self.dQ is None:
+        if variant and variant not in self.vendor_variants:
             raise FastqFileFormatException(
-                    'PHRED score (%d..%d) incompatible with known formats' %
-                    (min_pos, max_pos))
+                    'unknown vendor variant "%s"' % variant)
+
+        # create list of variants compatible with PHRED scores
+        variants = []
+        dQs = []
+        for name, vendor_variant in Fastq.vendor_variants.items():
+
+            if ((min_pos - vendor_variant.dQ) in vendor_variant.Qrange
+                    and (max_pos - vendor_variant.dQ) in vendor_variant.Qrange):
+                dQs.append(vendor_variant.dQ)
+                variants.append(name)
+
+        if variant is None:
+            # set variant from guesses
+            if not variants:
+                raise FastqFileFormatException(
+                        'could not find any suitable fastq vendor variant')
+            if len(set(dQs)) > 1:
+                raise FastqFileFormatException(
+                        'cannot determine dQ with guessed vendor variants "%s"'
+                        % str(variants))
+            self.variants = variants
+            self.dQ = dQs[0]
+        else:
+            # check specified variant
+            if variant not in variants:
+                lo.warning('specified vendor variant "%s" seems not to be '
+                        'compatible with file' % variant)
+            self.variants = [variant]
+            self.dQ = self.vendor_variants[variant].dQ
+
 
         self.Azero = self.ASCII[self.dQ]
 
@@ -141,12 +152,13 @@ class Fastq:
                 self.records_approx *= 2
 
         # output some infos
-        if self.gz:
-            lo.info('gzipped fastq : readlength=? records_approx=? dQ=%d variants=%s' % (
-                    self.dQ, str(self.variants)))
-        else:
-            lo.info('fastq : readlength=%d records_approx=%d dQ=%d variants=%s' % (
-                    self.readlength, self.records_approx, self.dQ, str(self.variants)))
+        if not quiet:
+            if self.gz:
+                lo.info('gzipped fastq : readlength=? records_approx=? dQ=%d variants=%s' % (
+                        self.dQ, str(self.variants)))
+            else:
+                lo.info('fastq : readlength=%d records_approx=%d dQ=%d variants=%s' % (
+                        self.readlength, self.records_approx, self.dQ, str(self.variants)))
 
 
     def filesizes(self):
@@ -295,7 +307,6 @@ class Fastq:
                 pos = -1
         return pos_, length
 
-
     def readhit(self, hit):
         ''' :param hit: a :py:class:`kvarq.engine.Hit`
             :returns: a string base sequence '''
@@ -319,7 +330,8 @@ class Fastq:
             self.fd.seek(0)
 
     def seekback(self):
-        ''' moves file pointer to beginning of current record '''
+        ''' moves file pointer to beginning current (if after ``plus``) or previous
+            (if before ``plus``) record '''
         l = pos = None
         while pos!=0:
             # go one line up
@@ -345,13 +357,13 @@ class Fastq:
         self.fd.seek(pos)
         self.seekback()
         ident, seq, plus, scores =  self.readrecord()
-        print ident
-        print '-'.join(['%s(%d)'%(base, self.A2Q(A))
-                for base, A in zip(seq, scores)])
+        print(ident)
+        print('-'.join(['%s(%d)'%(base, self.A2Q(A))
+                for base, A in zip(seq, scores)]))
 
         if Amin:
             pos, length = self.cutoff(scores, Amin)
-            print 'Amin=%s -> pos=%d length=%d'%(Amin, pos, length)
+            print('Amin=%s -> pos=%d length=%d'%(Amin, pos, length))
 
     def readrecord(self):
         ''' reads one record; :py:attr:`fd` must point at first character of a
@@ -360,6 +372,14 @@ class Fastq:
                 for j in range(4))
         return ident, seq, plus, scores
 
+    def readrecordat(self, hit):
+        ''' :param hit: a :py:class:`kvarq.engine.Hit`
+            :returns: the four .fastq files representing the record '''
+        self.fd.seek(hit.file_pos)
+        self.seekback()
+        ident, seq, plus, scores = self.readrecord() # previous record
+        ident, seq, plus, scores = self.readrecord() # our record
+        return '\n'.join([ident, seq, plus, scores]) + '\n'
 
     @tictoc('fastq.readhits')
     def readhits(self, hits):

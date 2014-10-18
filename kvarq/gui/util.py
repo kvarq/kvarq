@@ -1,10 +1,10 @@
 
 from kvarq import VERSION, DOC_URL
 from kvarq.log import lo
-from kvarq.util import is_exe, is_app, get_root_path
+from kvarq.util import is_exe, is_app, get_root_path, get_help_path
 
 import os, sys, os.path
-import webbrowser, urlparse, urllib
+import webbrowser
 import threading
 
 import Tkinter as tk
@@ -62,27 +62,10 @@ def focus_force():
         os.system('''/usr/bin/osascript -e 'tell app "Finder" to set frontmost of process "Python" to true' ''')
 
 
-def open_help(dummy=None, page='index.html', anchor=''):
-    path = None
-
-    if is_app() or is_exe():
-        path = os.path.join(sys.prefix, 'docs', '_build', 'html', page)
-    else:
-        candidate = get_root_path('docs', '_build', 'html')
-        if os.path.isdir(candidate):
-            path = os.path.abspath(os.path.join(candidate, page))
-
+def open_help(page='index', anchor=None):
     # unfortunately, anchors don't work under windows:
     # http://stackoverflow.com/questions/6374761/python-webrowser-open-url-with-bookmarks-like-www-something-com-file-htmltop
-    if anchor and anchor[0] != '#':
-        anchor = '#' + anchor
-
-    if path:
-        webbrowser.open(urlparse.urljoin('file:', urllib.pathname2url(path) + anchor))
-
-    else:
-        # fallback to online docs
-        webbrowser.open(DOC_URL + page + anchor)
+    webbrowser.open(get_help_path(page, anchor, need_url=True))
 
 
 class BackgroundJob(tk.Tk):

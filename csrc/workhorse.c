@@ -37,19 +37,22 @@ typedef struct ll_item_ {
 
 struct fastq_file {
     const char **fnames; // NULL terminated
-    int fname_i;
+    int fname_i; // pointing to NEXT file to be opened
+    FILE *fd; // of current file
+
+    size_t size; // sum of filesizes of all files
+    size_t ftell0; // sum of filesizes of files already read
+    size_t fpos; // within inflated data, not reset between files
+    int eof; // set to 1 when end of file reached
+
     const char *buf; // partial record from last read
     size_t buf_size;
-    FILE *fd;
-    size_t size;
-    size_t fpos; // within inflated data
-    size_t ftell0; // sum of filesizes of files already read
-    int eof;
 
-    int compressed;
-    mz_stream mzs;
-    char *inbuf;
-    long remaining;
+    int compressed; // set to 1 if file ends in .gz
+
+    char *inbuf; // buffer for reading deflated data
+    mz_stream mzs; // miniz dat structure
+    long remaining; // bytes still to be read in current .gz file
 };
 
 struct scanargs {
@@ -76,16 +79,20 @@ pthread_mutex_t ll_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t rl_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t fastq_read_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t records_parsed_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t interpreter_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t profile_mutex = PTHREAD_MUTEX_INITIALIZER;
 // python objects for interfacing etc
 PyObject *engine_mod, *hittuple;
-// python pthreads exception handling
-PyObject *exception, *fastq_exception;
 // python object for logging output
 PyObject *lo_log;
 long LOG_DEBUG, LOG_INFO, LOG_WARNING, LOG_ERROR, LOG_FATAL;
 #define LOG_BUF_SIZE 1024
+#define LO_LOG_MAX_MESSAGES 128
+char *lo_log_bufs[LO_LOG_MAX_MESSAGES];
+int lo_log_levels[LO_LOG_MAX_MESSAGES];
+int lo_log_i = 0;
+// python pthreads exception handling
+PyObject *exception, *fastq_exception;
 #define ERRSTR_LENGTH 1024
 char errstr[ERRSTR_LENGTH];
 
@@ -139,6 +146,7 @@ long pthread2long(pthread_t x) {
 /* utility functions {{{1 */
 
 // use globals LOG_{DEBUG|INFO|WARNING|ERROR|FATAL} as first argument
+// can only be called outside of Py_BEGIN_ALLOW_THREADS .. Py_END_ALLOW_THREADS !
 
 void lo_log_msg(int level, char *fmt, ...)
 {
@@ -150,9 +158,44 @@ void lo_log_msg(int level, char *fmt, ...)
     vsnprintf(buf + strlen(buf), LOG_BUF_SIZE - strlen(buf), fmt, args);
     va_end(args);
 
-    pthread_mutex_lock(&interpreter_mutex);
     PyObject_CallObject(lo_log, Py_BuildValue("(is)", level, buf));
-    pthread_mutex_unlock(&interpreter_mutex);
+}
+
+// call this method within Py_BEGIN_ALLOW_THREADS .. Py_END_ALLOW_THREADS
+
+void lo_log_msg_add(int level, char *fmt, ...)
+{
+    char *log_header = "[kvarq.engine] ", *buf;
+    va_list args;
+
+    buf = (char *) malloc(LOG_BUF_SIZE);
+    sprintf(buf, "%s", log_header);
+    va_start(args, fmt);
+    vsnprintf(buf + strlen(buf), LOG_BUF_SIZE - strlen(buf), fmt, args);
+    va_end(args);
+
+    if (lo_log_i < LO_LOG_MAX_MESSAGES) {
+	pthread_mutex_lock(&log_mutex);
+	lo_log_levels[lo_log_i] = level;
+	lo_log_bufs[lo_log_i++] = buf;
+	pthread_mutex_unlock(&log_mutex);
+    }
+}
+
+// again outside Py_BEGIN_ALLOW_THREADS .. Py_END_ALLOW_THREADS to print
+// messages registered via lo_log_msg_add
+
+void lo_log_msg_print() {
+    int i, level;
+    char *buf;
+
+    for(i = 0; i < lo_log_i; i++) {
+	buf = lo_log_bufs[i];
+	level = lo_log_levels[i];
+	PyObject_CallObject(lo_log, Py_BuildValue("(is)", level, buf));
+	free(buf);
+    }
+    lo_log_i = 0;
 }
 
 void dump_record(char *startrecord, char *startread, int rl)
@@ -541,6 +584,9 @@ int fastq_open_next(struct fastq_file *fastq)
 	// initialize datastructure for inflating
 	fastq->compressed = 1;
 
+	// must be reset before call to mz_inflateInit2
+	memset((void *) &fastq->mzs, 0, sizeof(mz_stream));
+
 	if (mz_inflateInit2(&fastq->mzs, -MZ_DEFAULT_WINDOW_BITS) != MZ_OK)
 	{
 	    fclose(fastq->fd);
@@ -677,7 +723,7 @@ int fastq_rewind(char *buf, int n)
  * also updates globals fastq_size_estimated and fastq_parsed
  *
  * @param fastq pointer as returned by fastq_open
- * @param buf where the read data is aved
+ * @param buf where the read data is saved
  * @param buf_size maximum number of bytes that can be saved in buf
  * @param fposp pointer to file position of first byte in buffer
  *
@@ -700,10 +746,11 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
     pthread_mutex_lock(&fastq_read_mutex);
 
     // eof? open next file if available
-    if (fastq->eof != 0)
+    if (fastq->eof != 0) {
 	if (fastq->fnames[fastq->fname_i] != NULL)
 	    if (fastq_open_next(fastq) != 0)
 		return -1;
+    }
 
     // copy partial record from last read
     if (fastq->buf_size > 0)
@@ -785,10 +832,10 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
 	    n += avail_out - fastq->mzs.avail_out;
 
 	    /*
-	    DBG("fastq_read [%li] : inflated %d -> %d bytes",
-		    thread_self(),
-		    avail_in - fastq->mzs.avail_in, avail_out - fastq->mzs.avail_out);
-	    */
+	       DBG("fastq_read [%li] : inflated %d -> %d bytes",
+	       thread_self(),
+	       avail_in - fastq->mzs.avail_in, avail_out - fastq->mzs.avail_out);
+	       */
 
 	    // some versions of gzip create files with many successive deflated streams
 	    if (status == MZ_STREAM_END &&
@@ -802,7 +849,7 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
 		msg = skip_gz_header(fastq->fd, 10);
 		if (msg != NULL)
 		{
-		    lo_log_msg(LOG_ERROR, "cannot read next deflated stream "
+		    lo_log_msg_add(LOG_ERROR, "cannot read next deflated stream "
 			    "in compressed file : %s", msg);
 		    fastq->remaining = 0;
 		}
@@ -889,11 +936,11 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
     }
 
     /*
-    DBG("fastq_read [%li] : read %ld=(%ld+%ld+%ld) bytes -> fpos=%ld",
-	    thread_self(), leftovers + n + fastq->buf_size,
-	    leftovers, n, fastq->buf_size,
-	    fastq->fpos);
-    */
+       DBG("fastq_read [%li] : read %ld=(%ld+%ld+%ld) bytes -> fpos=%ld",
+       thread_self(), leftovers + n + fastq->buf_size,
+       leftovers, n, fastq->buf_size,
+       fastq->fpos);
+       */
 
     pthread_mutex_unlock(&fastq_read_mutex);
     profile_stop("fastq_read");
@@ -1394,7 +1441,10 @@ engine_findseqs(PyObject *self, PyObject *findseqs_args)
     free(args.seqlist);
     free(args.seqlengths);
 
+    lo_log_msg_print();
+
     if (exception != NULL) {
+	// returning ret=NULL with generate "exception" additonal info "errstr"
 	PyErr_SetString(exception, errstr);
 	exception = NULL;
     }
@@ -1412,6 +1462,8 @@ engine_stop(PyObject *self, PyObject *args)
 {
     if (!PyArg_ParseTuple(args, ""))
 	return NULL;
+
+    lo_log_msg(LOG_DEBUG, "engine stopped");
 
     stop++;
 
@@ -1573,5 +1625,5 @@ initengine(void)
 #endif
 }
 
-// vim:ts=8:noet:sw=4:
+// vim:ts=8:noet:sw=4:fdm=marker
 

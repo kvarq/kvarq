@@ -11,6 +11,7 @@ from kvarq import genes
 from kvarq.util import TextHist
 from kvarq.fastq import Fastq
 from kvarq.legacy import convert_legacy_data
+from kvarq.config import default_config
 
 import json, codecs
 import time
@@ -35,6 +36,9 @@ class Coverage:
     have ``len(coverage.coverage)=21``, ``coverage.start=10``,
     ``coverage.stop=11`` with ``coverage.coverage[10]`` corresponding to base
     pair 1000 on the genome
+
+    The attribute :py:attr:`mutations` is a dictionary that translates
+    base index to a string with all alternate bases found at that position
     '''
 
     def __init__(self, plus_seq):
@@ -74,12 +78,48 @@ class Coverage:
                 self.mutations[c_j] = self.mutations.get(c_j, '') + c_b
 
     def bases_at(self, idx):
-        ''' :returns: array of ``bases=>coverage`` at specified position '''
+        ''' :returns: dictionary of ``{'A': n, ...}`` at specified position
+            (including original base) '''
         m = self.mutations.get(idx, '')
-        ret = { self.plus_seq[idx]:self.coverage[idx]-len(m) }
+        ret = { self.plus_seq[idx]: self.coverage[idx]-len(m) }
         for b in set(m):
             ret[b] = m.count(b)
         return ret
+
+    def fractions_at(self, idx):
+        ''' :returns: an OrderedDictionary ``{'A': f, ...}`` at specified position
+            where f ranges from 0 to 1 (most prevalent first) '''
+        bases = self.bases_at(idx)
+        total = sum(bases.values())
+        return OrderedDict(sorted([
+                (b, n/float(max(1, total))) for b, n in bases.items()
+            ], key=lambda x:-x[1]))
+
+    def minf(self, include_margins=False):
+        ''' :param include_margins: whether to check in the margins as well
+            :returns: minimum fraction of most dominant base '''
+
+        if include_margins:
+            start = 0
+            stop = len(self)
+        else:
+            start = self.start
+            stop = self.stop
+
+        return min([self.fractions_at(pos).values()[0]
+                for pos in range(start, stop)])
+
+    def mixed(self, fmin=0.9, include_margins=False):
+        ''' whether coverage seems to be mixed
+
+            :param fmin: coverage is considered mixed if any of the bases has
+                a most prevalent variant that is below this given threshold
+                (e.g. when set to the default 0.9 then every position must be
+                covered with >=90% to be considered pure)
+            :param include_margins: whether to check in the margins as well '''
+
+        cminf = self.minf(include_margins=include_margins)
+        return cminf > 0 and cminf< fmin
 
     def mean(self, include_margins=True):
         '''
@@ -203,7 +243,7 @@ class Analyser:
         self.fastq_sizes = None
         self.fastq_readlength = None
         self.fastq_records_approx = None
-        self.spacing = None
+        self.spacing = default_config['spacing']
 
         # direct results from scanning
         self.hits = None 
@@ -217,7 +257,7 @@ class Analyser:
         self.results = None
 
 
-    def load_coverages(self, testsuites, spacing=None):
+    def load_coverages(self, testsuites, spacing):
         '''
         :param spacing: how many bases are added on either side to the
             sequence from templates that are read from a reference genome
@@ -227,10 +267,6 @@ class Analyser:
             with a :py:class:`kvarq.genes.Sequence` with flanks of the
             length specified by ``spacing``
         '''
-
-        if not spacing and not self.spacing:
-            spacing = 25 #TODO determine margins depending on self.fastq
-        self.spacing = spacing
 
         coverages = OrderedDict()
 
@@ -309,7 +345,7 @@ class Analyser:
         self.fastq_records_approx = fastq.records_approx
 
         self.testsuites = testsuites
-        self.coverages = self.load_coverages(testsuites)
+        self.coverages = self.load_coverages(testsuites, spacing=self.spacing)
 
         self.config = engine.get_config()
 
@@ -497,6 +533,11 @@ class Analyser:
             coverage.deserialize(serialized_coverage)
             self.coverages[name] = coverage
 
+    @tictoc('extract_hits')
+    def extract_hits(self, fname):
+        out = open(fname, 'w')
+        for hit in self.hits:
+            out.write(self.fastq.readrecordat(hit))
 
 
 class AnalyserJson:

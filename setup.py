@@ -9,29 +9,16 @@ import kvarq
 
 def shoutout(msg):
     if hasattr(sys.stdout, 'isatty') and sys.stdout.isatty():
-        print '\033[91m'
-    print '*' * (len(msg) + 2*5)
-    print '**** ' + msg + ' ****'
-    print '*' * (len(msg) + 2*5)
+        print('\033[91m')
+    print('*' * (len(msg) + 2*5))
+    print('**** ' + msg + ' ****')
+    print('*' * (len(msg) + 2*5))
     if hasattr(sys.stdout, 'isatty') and sys.stdout.isatty():
-        print '\033[m'
+        print('\033[m')
 
 kwargs = dict(options={})
 additional_datafiles = []
 
-# optional dependencies {{{1
-# include (optional) xlwt, xlrd if locally installed
-includes = []
-try:
-    import xlwt
-    includes.append('xlwt')
-except ImportError:
-    shoutout('building app/exe file without xlwt')
-try:
-    import xlrd
-    includes.append('xlrd')
-except ImportError:
-    shoutout('building app/exe file without xlrd')
 
 # configure compilation extensions {{{1
 if sys.platform == 'win32':
@@ -49,6 +36,7 @@ else:
 
 
 # package builders {{{1
+includes = []
 
 # windows : py2exe {{{2
 if sys.platform == 'win32':
@@ -73,11 +61,11 @@ if sys.platform == 'win32':
         py2exe_command_run = py2exe_command.run
         def py2exe_mv_files(self):
             py2exe_command_run(self)
-            print '*** renaming .exe files ***'
+            print('*** renaming .exe files ***')
             for src, dst in (('cli.exe', 'kvarq.exe'), ('main.exe', 'kvarq-gui.exe')):
                 src = os.path.join(self.dist_dir, src)
                 dst = os.path.join(self.dist_dir, dst)
-                print '%s -> %s'%(src, dst)
+                print('%s -> %s'%(src, dst))
                 if os.path.exists(dst): os.unlink(dst)
                 os.rename(src, dst)
         py2exe_command.run = py2exe_mv_files
@@ -89,6 +77,7 @@ if sys.platform == 'win32':
 if sys.platform == 'darwin':
     kwargs['options']['py2app'] = dict(
             iconfile='res/logo/TPH_DNA.icns',
+            excludes=['email'],
             includes=includes
         )
 
@@ -112,9 +101,17 @@ docs_datafiles = []
 for path, dirs, files in os.walk(htmldir):
     docs_datafiles += [(path, [os.path.join(path, fname) for fname in files])]
 
+# install all testsuite files as data files
 testsuites_datafiles = []
-for path, dirs, files in os.walk(os.path.join(os.path.dirname(__file__), 'testsuites')):
-    testsuites_datafiles += [(path, [os.path.join(path, fname) for fname in files])]
+testsuite_base = os.path.join(os.path.dirname(__file__), 'testsuites')
+for path, dirs, files in os.walk(testsuite_base):
+    if '.git' in dirs:
+        dirs.remove('.git')
+    testsuites_datafiles += [(path, [os.path.join(path, fname)
+            for fname in files
+            if fname[0] != '.' and not fname.endswith('.pyc')
+        ])]
+
 
 # setup(... {{{1
 setup(
@@ -140,7 +137,7 @@ setup(
         'kvarq.gui'
         ],
     ext_modules=[engine_ext],
-    test_suite = 'tests.automated',
+    test_suite = 'tests',
     # (package_data does not work well with py2app/py2exe packaged applications)
     data_files = docs_datafiles + testsuites_datafiles + additional_datafiles,
     include_package_data=False, # from version control...
