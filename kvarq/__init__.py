@@ -7,7 +7,7 @@
 #   - third number : increments with every compatible change
 #   - a1, ... suffix indicate pre-release development versions
 
-VERSION = '0.12.2'
+VERSION = '0.12.3a1'
 
 DOWNLOAD_URL = 'https://siwsstph.ch/kvarq'
 DOC_URL = 'http://kvarq.readthedocs.org/'

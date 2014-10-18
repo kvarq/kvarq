@@ -802,6 +802,7 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
 		    profile_stop("fastq_read");
 		    return -1;
 		}
+		/*DBG("\nread %ld bytes into inbuf", m);*/
 		fastq->mzs.next_in = (const unsigned char *) fastq->inbuf;
 		fastq->mzs.avail_in = m;
 		fastq->remaining -= m;
@@ -864,13 +865,19 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
 		}
 	    }
 
+	    // continue reading as long as there is space in output buffer
+	    // AND input is available (less than 10 bytes may remain in input
+	    // buffer without being processed by miniz)
 	} while(fastq->remaining + fastq->mzs.avail_in > 10 &&
 		fastq->mzs.avail_out > 0);
 
-	if (fastq->remaining + fastq->mzs.avail_in < 10)
-	    fastq->eof = 1;
+	/*DBG("after while: remaining %ld mzs.avail_in %d mzs.avail_out %d",*/
+		/*fastq->remaining, fastq->mzs.avail_in, fastq->mzs.avail_out);*/
 
-	//DBG("status=%d mzs.avail_out=%ld", status, fastq->mzs.avail_out);
+	// EOF is reached when output buffer cannot be filled any more from file
+	// (it's possible having avail_in < 10 but still inflating data...)
+	if (fastq->mzs.avail_out > 0)
+	    fastq->eof = 1;
 
 	// update guess
 	fastq_size_estimated = (size_t) (
@@ -935,12 +942,13 @@ size_t fastq_read(struct fastq_file *fastq, char *buf, size_t buf_size, size_t *
 	}
     }
 
-    /*
-       DBG("fastq_read [%li] : read %ld=(%ld+%ld+%ld) bytes -> fpos=%ld",
-       thread_self(), leftovers + n + fastq->buf_size,
-       leftovers, n, fastq->buf_size,
-       fastq->fpos);
-       */
+    /*DBG("fastq_read [%li] :%s read %ld %ld|%ld|%ld return %ld fpos %ld",*/
+	    /*thread_self(),*/
+	    /*fastq->eof ? " EOF" : "",*/
+	    /*n, // what was read*/
+	    /*leftovers, n - fastq->buf_size, fastq->buf_size, // three parts*/
+	    /*leftovers + n - fastq->buf_size, // what is returned*/
+	    /*fastq->fpos);*/
 
     pthread_mutex_unlock(&fastq_read_mutex);
     profile_stop("fastq_read");
