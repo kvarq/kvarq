@@ -1,6 +1,6 @@
 [submodule "testsuites/CanSNPer"]
 	path = testsuites/CanSNPer
-	url = git@github.com:kvarq/kvarq-CanSNPer.git
+	url = https://github.com/kvarq/kvarq-CanSNPer.git
 [submodule "testsuites/ebola-sierraleone14"]
 	path = testsuites/ebola-sierraleone14
 	url = https://github.com/kvarq/kvarq-ebola-sierraleone14.git
